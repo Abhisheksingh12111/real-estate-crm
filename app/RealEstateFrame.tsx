@@ -46,8 +46,12 @@ const subtitles: Record<string, string> = {
 
 export default function RealEstateFrame({
   children,
+  title,
+  subtitle,
 }: {
   children: React.ReactNode;
+  title?: string;
+  subtitle?: string;
 }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -61,7 +65,7 @@ export default function RealEstateFrame({
   });
 
   const activeTitle = activeLink?.[0] ?? "Overview";
-  const subtitle = subtitles[activeTitle] ?? "Realty operations dashboard";
+  const activesubtitle = subtitles[activeTitle] ?? "Realty operations dashboard";
 
   return (
     <div className="min-h-screen bg-[#080b12] text-white">
