@@ -24,3 +24,119 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+/* =========================================================
+   REAL ESTATE OS - GLOBAL LIGHT THEME
+   ========================================================= */
+
+html[data-dashboard-theme="light"] {
+  background: #f3f4f6;
+}
+
+html[data-dashboard-theme="light"] body {
+  background: #f3f4f6 !important;
+  color: #18181b !important;
+}
+
+/* Main dark dashboard backgrounds */
+html[data-dashboard-theme="light"] [class*="bg-[#080b12]"],
+html[data-dashboard-theme="light"] [class*="bg-[#07090c]"],
+html[data-dashboard-theme="light"] [class*="bg-[#0b0e12]"],
+html[data-dashboard-theme="light"] [class*="bg-[#0b0f18]"] {
+  background-color: #f8fafc !important;
+}
+
+/* Dark translucent cards */
+html[data-dashboard-theme="light"] [class*="bg-white/[0.01"],
+html[data-dashboard-theme="light"] [class*="bg-white/[0.02"],
+html[data-dashboard-theme="light"] [class*="bg-white/[0.03"],
+html[data-dashboard-theme="light"] [class*="bg-white/[0.04"],
+html[data-dashboard-theme="light"] [class*="bg-white/[0.05"],
+html[data-dashboard-theme="light"] [class*="bg-white/[0.06"],
+html[data-dashboard-theme="light"] [class*="bg-white/[0.07"],
+html[data-dashboard-theme="light"] [class*="bg-white/[0.08"],
+html[data-dashboard-theme="light"] [class*="bg-white/[0.09"] {
+  background-color: #ffffff !important;
+}
+
+/* Active navigation / selected items */
+html[data-dashboard-theme="light"] [class*="bg-white/[0.09]"] {
+  background-color: #e5e7eb !important;
+}
+
+/* Borders */
+html[data-dashboard-theme="light"] [class*="border-white/"],
+html[data-dashboard-theme="light"] [class*="border-white["] {
+  border-color: #e5e7eb !important;
+}
+
+/* White text becomes dark */
+html[data-dashboard-theme="light"] .text-white {
+  color: #18181b !important;
+}
+
+html[data-dashboard-theme="light"] [class*="text-white/"] {
+  color: #52525b !important;
+}
+
+/* Zinc text */
+html[data-dashboard-theme="light"] .text-zinc-300 {
+  color: #3f3f46 !important;
+}
+
+html[data-dashboard-theme="light"] .text-zinc-400 {
+  color: #71717a !important;
+}
+
+html[data-dashboard-theme="light"] .text-zinc-500 {
+  color: #71717a !important;
+}
+
+html[data-dashboard-theme="light"] .text-zinc-600 {
+  color: #52525b !important;
+}
+
+html[data-dashboard-theme="light"] .text-zinc-700 {
+  color: #3f3f46 !important;
+}
+
+/* Dark inputs */
+html[data-dashboard-theme="light"] input,
+html[data-dashboard-theme="light"] textarea,
+html[data-dashboard-theme="light"] select {
+  background-color: #ffffff !important;
+  color: #18181b !important;
+  border-color: #d4d4d8 !important;
+}
+
+/* Placeholder */
+html[data-dashboard-theme="light"] input::placeholder,
+html[data-dashboard-theme="light"] textarea::placeholder {
+  color: #a1a1aa !important;
+}
+
+/* Hover surfaces */
+html[data-dashboard-theme="light"] [class*="hover:bg-white/"]:hover {
+  background-color: #f1f5f9 !important;
+}
+
+/* Dark hover text */
+html[data-dashboard-theme="light"] [class*="hover:text-white"]:hover {
+  color: #18181b !important;
+}
+
+/* Mobile overlay */
+html[data-dashboard-theme="light"] [class*="bg-black/60"] {
+  background-color: rgba(0, 0, 0, 0.2) !important;
+}
+
+/* Keep accent colors */
+html[data-dashboard-theme="light"] .text-cyan-300,
+html[data-dashboard-theme="light"] .text-cyan-400,
+html[data-dashboard-theme="light"] .text-cyan-500 {
+  color: #06b6d4 !important;
+}
+
+/* Dark theme preview/card should stay dark */
+html[data-dashboard-theme="light"] button [class*="bg-[#07090c]"] {
+  background-color: #07090c !important;
+}
