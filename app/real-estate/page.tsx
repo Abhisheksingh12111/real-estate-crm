@@ -1,14 +1,14 @@
 "use client";
-import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowDownRight,
   ArrowUpRight,
   Building2,
   CalendarDays,
-  CheckCircle2,
   ChevronDown,
   CircleDollarSign,
+  FileText,
   Target,
   TrendingUp,
   Users,
@@ -22,684 +22,739 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { supabase } from "@/lib/supabaseClient";
 
-type Id = number | string;
+import { supabase } from "@/lib/supabaseClient";
+import { useProfileName } from "@/lib/useProfileName";
+
 type Range = "Last 30 days" | "Last 90 days";
 
-const ranges: Range[] = ["Last 30 days", "Last 90 days"];
-const rangeDays: Record<Range, number> = {
-  "Last 30 days": 30,
-  "Last 90 days": 90,
-};
-
-const DAY = 24 * 60 * 60 * 1000;
-
-type LeadRow = {
-  id: Id;
-  created_at: string | null;
-  name: string | null;
+type Lead = {
+  id: number;
   status: string | null;
+  created_at: string;
 };
 
-type DealRow = {
-  id: Id;
-  created_at: string | null;
+type Deal = {
+  id: number;
   client_name: string | null;
   property_name: string | null;
   deal_value: number | null;
   status: string | null;
   deal_date: string | null;
+  created_at: string;
 };
 
-type VisitRow = {
-  id: Id;
-  created_at: string | null;
-  customer_name: string | null;
-  property_name: string | null;
+type Visit = {
+  id: number;
   visit_date: string | null;
   status: string | null;
 };
 
-type PropertyRow = {
-  id: Id;
-  created_at: string | null;
-  title: string | null;
-  property_type: string | null;
+type Property = {
+  id: number;
+  status: string | null;
 };
 
-type Change = { label: string; up: boolean };
+type MonthlyTarget = {
+  month: string;
+  expected_revenue: number | null;
+};
 
-type Activity = {
-  key: string;
-  icon: React.ElementType;
+const DAY = 86400000;
+
+function startOfToday() {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+
+function toDate(value?: string | null) {
+  if (!value) return null;
+  const d = new Date(value.length === 10 ? `${value}T00:00:00` : value);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+function ymd(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(
+    2,
+    "0"
+  )}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function monthKey(d: Date) {
+  return ymd(d).slice(0, 7);
+}
+
+function formatMoney(n: number) {
+  if (n >= 10000000) return `₹${(n / 10000000).toFixed(2)} Cr`;
+  if (n >= 100000) return `₹${(n / 100000).toFixed(1)} L`;
+  return `₹${Math.round(n).toLocaleString("en-IN")}`;
+}
+
+function pctChange(cur: number, prev: number) {
+  if (prev === 0) return cur > 0 ? 100 : 0;
+  return ((cur - prev) / prev) * 100;
+}
+
+function initialsOf(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "?";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function capitalize(s: string) {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 12) return "Good morning";
+  if (h < 17) return "Good afternoon";
+  return "Good evening";
+}
+
+function Metric({
+  title,
+  value,
+  change,
+  positive,
+  icon,
+}: {
   title: string;
-  description: string;
-  at: number;
-};
+  value: string;
+  change: string;
+  positive?: boolean;
+  icon: React.ReactNode;
+}) {
+  return (
+    <div className="group rounded-2xl border border-white/[0.09] bg-[#0b0e12] p-5 transition hover:border-white/20 hover:bg-[#10141a]">
+      <div className="flex items-start justify-between">
+        <p className="text-sm text-zinc-400">{title}</p>
 
-function ts(value: string | null) {
-  if (!value) return NaN;
-  return new Date(value.length === 10 ? `${value}T00:00:00` : value).getTime();
+        <span className="rounded-xl bg-white/[0.06] p-2 text-zinc-400 transition group-hover:text-white">
+          {icon}
+        </span>
+      </div>
+
+      <p className="mt-5 text-[30px] font-semibold tracking-tight text-white">
+        {value}
+      </p>
+
+      <div
+        className={`mt-2 flex items-center gap-1 text-xs font-medium ${
+          positive ? "text-emerald-400" : "text-rose-400"
+        }`}
+      >
+        {positive ? (
+          <ArrowUpRight size={14} />
+        ) : (
+          <ArrowDownRight size={14} />
+        )}
+
+        <span>{change}</span>
+
+        <span className="ml-1 text-zinc-600">vs previous period</span>
+      </div>
+    </div>
+  );
 }
 
-function between(value: string | null, from: number, to: number) {
-  const t = ts(value);
-  return !Number.isNaN(t) && t >= from && t < to;
+function MiniCard({
+  icon,
+  title,
+  value,
+  note,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  value: string;
+  note: string;
+}) {
+  return (
+    <div className="rounded-2xl border border-white/[0.09] bg-[#0b0e12] p-5 transition hover:border-white/20">
+      <div className="flex items-center gap-2 text-zinc-500">
+        {icon}
+        <span className="text-sm">{title}</span>
+      </div>
+
+      <p className="mt-4 text-2xl font-semibold text-white">{value}</p>
+
+      <p className="mt-1 text-xs text-zinc-600">{note}</p>
+    </div>
+  );
 }
 
-function formatValue(value: number) {
-  if (!value) return "₹0";
-  if (value >= 10000000) return `₹${+(value / 10000000).toFixed(2)} Cr`;
-  if (value >= 100000) return `₹${+(value / 100000).toFixed(2)} Lakh`;
-  return `₹${Math.round(value).toLocaleString("en-IN")}`;
-}
-
-function pctChange(cur: number, prev: number): Change {
-  if (prev === 0) return { label: cur === 0 ? "0%" : "New", up: true };
-  const delta = ((cur - prev) / prev) * 100;
-  return { label: `${Math.abs(delta).toFixed(1)}%`, up: delta >= 0 };
-}
-
-function countChange(cur: number, prev: number): Change {
-  const d = cur - prev;
-  return { label: String(Math.abs(d)), up: d >= 0 };
-}
-
-function ptsChange(cur: number, prev: number): Change {
-  const d = cur - prev;
-  return { label: `${Math.abs(d).toFixed(1)} pts`, up: d >= 0 };
-}
-
-function timeAgo(at: number) {
-  const diff = Date.now() - at;
-  if (diff < 0) return "Upcoming";
-
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "Just now";
-  if (mins < 60) return `${mins} min ago`;
-
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours} hr${hours > 1 ? "s" : ""} ago`;
-
-  const days = Math.floor(hours / 24);
-  if (days === 1) return "Yesterday";
-  if (days < 7) return `${days} days ago`;
-  if (days < 30) return `${Math.floor(days / 7)} wk${days >= 14 ? "s" : ""} ago`;
-
-  return `${Math.floor(days / 30)} mo ago`;
-}
-
-export default function OverviewPage() {
+export default function RealEstateDashboard() {
+  const [search, setSearch] = useState("");
   const [range, setRange] = useState<Range>("Last 30 days");
-  const [dropdownOpen, setDropdownOpen] = useState(false);
-  const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const [greeting, setGreeting] = useState("Welcome back");
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [deals, setDeals] = useState<Deal[]>([]);
+  const [visits, setVisits] = useState<Visit[]>([]);
+  const [properties, setProperties] = useState<Property[]>([]);
+  const [targets, setTargets] = useState<MonthlyTarget[]>([]);
 
-  const [leads, setLeads] = useState<LeadRow[]>([]);
-  const [deals, setDeals] = useState<DealRow[]>([]);
-  const [visits, setVisits] = useState<VisitRow[]>([]);
-  const [properties, setProperties] = useState<PropertyRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  const profileName = useProfileName();
+  const firstName = profileName.trim().split(/\s+/)[0] || "there";
 
   useEffect(() => {
-    const h = new Date().getHours();
-    setGreeting(h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening");
-  }, []);
+    let active = true;
 
-  useEffect(() => {
     async function load() {
-      const [l, d, v, p] = await Promise.all([
-        supabase.from("leads").select("id, created_at, name, status"),
-        supabase
-          .from("deals")
-          .select("id, created_at, client_name, property_name, deal_value, status, deal_date"),
-        supabase
-          .from("site_visits")
-          .select("id, created_at, customer_name, property_name, visit_date, status"),
-        supabase.from("properties").select("id, created_at, title, property_type"),
-      ]);
+      const [leadsRes, dealsRes, visitsRes, propsRes, targetsRes] =
+        await Promise.all([
+          supabase.from("leads").select("id,status,created_at"),
+          supabase
+            .from("deals")
+            .select(
+              "id,client_name,property_name,deal_value,status,deal_date,created_at"
+            ),
+          supabase.from("site_visits").select("id,visit_date,status"),
+          supabase.from("properties").select("id,status"),
+          supabase.from("monthly_targets").select("*"),
+        ]);
 
-      const firstError = l.error ?? d.error ?? v.error ?? p.error;
+      if (!active) return;
+
+      const firstError =
+        leadsRes.error || dealsRes.error || visitsRes.error || propsRes.error;
 
       if (firstError) {
+        console.error(firstError);
         setError(firstError.message);
-      } else {
-        setError(null);
-        setLeads((l.data ?? []) as LeadRow[]);
-        setDeals((d.data ?? []) as DealRow[]);
-        setVisits((v.data ?? []) as VisitRow[]);
-        setProperties((p.data ?? []) as PropertyRow[]);
       }
+
+      setLeads((leadsRes.data as Lead[]) ?? []);
+      setDeals((dealsRes.data as Deal[]) ?? []);
+      setVisits((visitsRes.data as Visit[]) ?? []);
+      setProperties((propsRes.data as Property[]) ?? []);
+      setTargets(
+        targetsRes.error ? [] : ((targetsRes.data as MonthlyTarget[]) ?? [])
+      );
       setLoading(false);
     }
 
     load();
+
+    return () => {
+      active = false;
+    };
   }, []);
 
-  // close dropdown when clicking outside of it
-  useEffect(() => {
-    function handleClickOutside(e: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setDropdownOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+  const data = useMemo(() => {
+    const days = range === "Last 30 days" ? 30 : 90;
+    const end = startOfToday().getTime() + DAY;
+    const start = end - days * DAY;
+    const prevStart = start - days * DAY;
 
-  function selectRange(value: Range) {
-    setRange(value);
-    setDropdownOpen(false);
-  }
+    const inRange = (d: Date | null, a: number, b: number) =>
+      !!d && d.getTime() >= a && d.getTime() < b;
 
-  const stats = useMemo(() => {
-    const days = rangeDays[range];
-    const now = Date.now();
-    const start = now - days * DAY;
-    const prevStart = now - 2 * days * DAY;
+    const dealDate = (d: Deal) => toDate(d.deal_date ?? d.created_at);
+    const value = (d: Deal) => Number(d.deal_value ?? 0);
 
-    const closed = deals.filter((d) => (d.status ?? "").toLowerCase() === "closed");
-    const active = deals.filter((d) => (d.status ?? "").toLowerCase() === "active");
+    // Leads
+    const leadsCur = leads.filter((l) =>
+      inRange(toDate(l.created_at), start, end)
+    );
+    const leadsPrev = leads.filter((l) =>
+      inRange(toDate(l.created_at), prevStart, start)
+    );
 
-    const sumValue = (rows: DealRow[]) =>
-      rows.reduce((total, d) => total + Number(d.deal_value ?? 0), 0);
+    const convCur = leadsCur.length
+      ? (leadsCur.filter((l) => l.status === "converted").length /
+          leadsCur.length) *
+        100
+      : 0;
+    const convPrev = leadsPrev.length
+      ? (leadsPrev.filter((l) => l.status === "converted").length /
+          leadsPrev.length) *
+        100
+      : 0;
 
-    // Revenue = closed deals ki value (deal_date ke hisaab se)
-    const revenue = sumValue(closed.filter((d) => between(d.deal_date, start, now)));
-    const prevRevenue = sumValue(closed.filter((d) => between(d.deal_date, prevStart, start)));
-
-    // New leads + conversion
-    const leadsNow = leads.filter((l) => between(l.created_at, start, now));
-    const leadsPrev = leads.filter((l) => between(l.created_at, prevStart, start));
-
-    const convRate = (rows: LeadRow[]) =>
-      rows.length
-        ? (rows.filter((l) => (l.status ?? "").toLowerCase() === "converted").length /
-            rows.length) *
-          100
-        : 0;
-
-    const conversion = convRate(leadsNow);
-    const prevConversion = convRate(leadsPrev);
+    // Revenue (closed deals)
+    const closedCur = deals.filter(
+      (d) => d.status === "closed" && inRange(dealDate(d), start, end)
+    );
+    const closedPrev = deals.filter(
+      (d) => d.status === "closed" && inRange(dealDate(d), prevStart, start)
+    );
+    const revCur = closedCur.reduce((s, d) => s + value(d), 0);
+    const revPrev = closedPrev.reduce((s, d) => s + value(d), 0);
 
     // Active deals
-    const activeNow = active.filter((d) => between(d.deal_date, start, now)).length;
-    const activePrev = active.filter((d) => between(d.deal_date, prevStart, start)).length;
+    const activeCur = deals.filter(
+      (d) => d.status === "active" && inRange(dealDate(d), start, end)
+    ).length;
+    const activePrev = deals.filter(
+      (d) => d.status === "active" && inRange(dealDate(d), prevStart, start)
+    ).length;
 
-    // Revenue chart: 6 buckets
-    const buckets = 6;
-    const bucketMs = (days * DAY) / buckets;
+    const activeAll = deals.filter((d) => d.status === "active");
+    const pipelineValue = activeAll.reduce((s, d) => s + value(d), 0);
+
+    // Chart buckets
+    const buckets = days === 30 ? 4 : 3;
+    const size = (days * DAY) / buckets;
+
+    const targetMap = new Map<string, number>();
+    targets.forEach((t) => {
+      const raw = String(t.month ?? "");
+      let key = /^\d{4}-\d{2}/.test(raw) ? raw.slice(0, 7) : "";
+      if (!key) {
+        const d = toDate(raw);
+        if (d) key = monthKey(d);
+      }
+      if (key) targetMap.set(key, Number(t.expected_revenue ?? 0));
+    });
 
     const chart = Array.from({ length: buckets }, (_, i) => {
-      const from = start + i * bucketMs;
-      const to = i === buckets - 1 ? now : from + bucketMs;
-      const value = sumValue(closed.filter((d) => between(d.deal_date, from, to)));
+      const bStart = start + i * size;
+      const bEnd = bStart + size;
+      const endDate = new Date(bEnd - DAY);
+
+      const revenue = closedCur
+        .filter((d) => {
+          const t = dealDate(d)?.getTime() ?? 0;
+          return t >= bStart && t < bEnd;
+        })
+        .reduce((s, d) => s + value(d), 0);
+
+      const monthlyTarget = targetMap.get(monthKey(endDate)) ?? 0;
+      const target = days === 30 ? monthlyTarget / 4 : monthlyTarget;
 
       return {
-        name: new Date(from).toLocaleDateString("en-GB", {
-          day: "2-digit",
-          month: "short",
-        }),
-        revenue: Math.round((value / 100000) * 10) / 10,
+        month:
+          days === 30
+            ? `Week ${i + 1}`
+            : endDate.toLocaleDateString("en-IN", { month: "short" }),
+        revenue: Math.round((revenue / 100000) * 10) / 10,
+        target: Math.round((target / 100000) * 10) / 10,
       };
     });
 
-    // Pipeline: leads.status se funnel (all leads)
-    const stageOf = (l: LeadRow) => (l.status ?? "new").toLowerCase();
-    const total = leads.length;
-
-    const counts = [
-      total,
-      leads.filter((l) => ["contacted", "site_visit", "converted"].includes(stageOf(l))).length,
-      leads.filter((l) => ["site_visit", "converted"].includes(stageOf(l))).length,
-      leads.filter((l) => stageOf(l) === "converted").length,
+    // Pipeline stages from leads.status
+    const stageDefs = [
+      { key: "new", name: "New Lead", color: "#06b6d4" },
+      { key: "contacted", name: "Contacted", color: "#22c55e" },
+      { key: "site_visit", name: "Site Visit", color: "#f59e0b" },
+      { key: "converted", name: "Converted", color: "#8b5cf6" },
     ];
 
-    const names = ["Total Leads", "Contacted", "Site Visit", "Converted"];
+    const stages = stageDefs.map((s) => {
+      const count = leadsCur.filter((l) => l.status === s.key).length;
+      return {
+        name: s.name,
+        color: s.color,
+        count,
+        percent: leadsCur.length
+          ? Math.round((count / leadsCur.length) * 100)
+          : 0,
+      };
+    });
 
-    const stages = names.map((name, i) => ({
-      name,
-      value: counts[i],
-      percentage: total ? Math.round((counts[i] / total) * 100) : 0,
-    }));
+    // Quick stats
+    const todayStr = ymd(startOfToday());
+    const visitsToday = visits.filter(
+      (v) => String(v.visit_date ?? "").slice(0, 10) === todayStr
+    );
+    const visitsPending = visitsToday.filter(
+      (v) => v.status === "scheduled"
+    ).length;
+
+    const availableProps = properties.filter(
+      (p) => p.status === "available"
+    ).length;
 
     return {
-      revenue,
-      revenueChange: pctChange(revenue, prevRevenue),
-      conversion,
-      conversionChange: ptsChange(conversion, prevConversion),
-      activeDeals: activeNow,
-      dealsChange: countChange(activeNow, activePrev),
-      newLeads: leadsNow.length,
-      leadsChange: pctChange(leadsNow.length, leadsPrev.length),
-      pipelineValue: sumValue(active),
-      pipelineDeals: active.length,
+      revenue: formatMoney(revCur),
+      revenueChangeNum: pctChange(revCur, revPrev),
+      conversion: `${convCur.toFixed(1)}%`,
+      conversionDiff: convCur - convPrev,
+      activeDeals: String(activeCur),
+      activeDiff: activeCur - activePrev,
+      newLeads: String(leadsCur.length),
+      leadsChangeNum: pctChange(leadsCur.length, leadsPrev.length),
+      pipeline: formatMoney(pipelineValue),
       chart,
       stages,
-      closedDeals: closed.filter((d) => between(d.deal_date, start, now)).length,
-      siteVisits: visits.filter((v) => between(v.visit_date, start, now)).length,
+      visitsToday: visitsToday.length,
+      visitsPending,
+      availableProps,
+      totalProps: properties.length,
+      closedCount: closedCur.length,
+      activeAllCount: activeAll.length,
     };
-  }, [range, leads, deals, visits]);
+  }, [range, leads, deals, visits, properties, targets]);
 
-  const activities = useMemo<Activity[]>(() => {
-    const items: Activity[] = [
-      ...leads.map((l) => ({
-        key: `lead-${l.id}`,
-        icon: Users,
-        title: "New lead added",
-        description: `${l.name ?? "A lead"} was added to the lead pipeline`,
-        at: ts(l.created_at),
-      })),
-      ...visits.map((v) => ({
-        key: `visit-${v.id}`,
-        icon: CalendarDays,
-        title: "Site visit scheduled",
-        description: `${v.customer_name ?? "Client"} · ${v.property_name ?? "Property"}`,
-        at: ts(v.created_at),
-      })),
-      ...deals.map((d) => {
-        const status = (d.status ?? "").toLowerCase();
-        return {
-          key: `deal-${d.id}`,
-          icon: CircleDollarSign,
-          title:
-            status === "closed"
-              ? "Deal closed"
-              : status === "cancelled"
-              ? "Deal cancelled"
-              : "Deal created",
-          description: `${d.property_name ?? "Property"} · ${formatValue(Number(d.deal_value ?? 0))}`,
-          at: ts(d.created_at),
-        };
-      }),
-      ...properties.map((p) => ({
-        key: `property-${p.id}`,
-        icon: Building2,
-        title: "Property added",
-        description: `${p.title ?? "Property"} · ${p.property_type ?? ""}`,
-        at: ts(p.created_at),
-      })),
-    ];
+  const filteredDeals = useMemo(() => {
+    const query = search.toLowerCase().trim();
 
-    return items
-      .filter((a) => !Number.isNaN(a.at))
-      .sort((a, b) => b.at - a.at)
-      .slice(0, 5);
-  }, [leads, visits, deals, properties]);
+    const sorted = [...deals].sort((a, b) => {
+      const ta = toDate(a.deal_date ?? a.created_at)?.getTime() ?? 0;
+      const tb = toDate(b.deal_date ?? b.created_at)?.getTime() ?? 0;
+      return tb - ta;
+    });
 
-  const growth = stats.revenueChange;
+    const matched = query
+      ? sorted.filter((deal) =>
+          `${deal.client_name ?? ""} ${deal.property_name ?? ""} ${
+            deal.status ?? ""
+          }`
+            .toLowerCase()
+            .includes(query)
+        )
+      : sorted;
+
+    return matched.slice(0, 8);
+  }, [search, deals]);
+
+  function toggleRange() {
+    setRange((current) =>
+      current === "Last 30 days" ? "Last 90 days" : "Last 30 days"
+    );
+  }
 
   return (
-    <div className="mx-auto max-w-[1500px]">
-      <div className="mb-8 flex flex-col justify-between gap-5 lg:flex-row lg:items-end">
-        <div>
-          <div className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.18em] text-cyan-400">
-            <span className="h-1.5 w-1.5 rounded-full bg-cyan-400" />
-            Dashboard Overview
+    <>
+      <div className="mx-auto max-w-[1500px]">
+        {/* Page heading */}
+        <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-semibold tracking-tight">
+              {greeting()}, {firstName}
+            </h2>
+
+            <p className="mt-1 text-sm text-zinc-500">
+              Here&apos;s what&apos;s happening with your real-estate business.
+            </p>
           </div>
 
-          <h1 className="text-3xl font-semibold tracking-tight text-white">
-            {greeting}, Abhishek
-          </h1>
-
-          <p className="mt-2 text-sm text-zinc-500">
-            {loading
-              ? "Loading your data..."
-              : "Here's what's happening across your real-estate business."}
-          </p>
-        </div>
-
-        {/* Working dropdown */}
-        <div className="relative w-fit" ref={dropdownRef}>
           <button
-            type="button"
-            onClick={() => setDropdownOpen((v) => !v)}
-            className="flex w-fit items-center gap-3 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-zinc-300 transition hover:bg-white/[0.07]"
+            onClick={toggleRange}
+            className="flex items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-sm text-zinc-400 transition hover:border-white/20 hover:text-white"
           >
-            <CalendarDays className="h-4 w-4 text-zinc-500" />
+            <CalendarDays size={15} />
             {range}
-            <ChevronDown
-              className={`h-4 w-4 text-zinc-500 transition-transform ${
-                dropdownOpen ? "rotate-180" : ""
-              }`}
-            />
+            <ChevronDown size={14} />
           </button>
-
-          {dropdownOpen && (
-            <div className="absolute right-0 z-20 mt-2 w-48 overflow-hidden rounded-xl border border-white/10 bg-[#10141b] p-1.5 shadow-xl shadow-black/40">
-              {ranges.map((item) => (
-                <button
-                  key={item}
-                  type="button"
-                  onClick={() => selectRange(item)}
-                  className="flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm text-zinc-300 transition hover:bg-white/[0.06]"
-                >
-                  {item}
-                  {range === item && <CheckCircle2 className="h-4 w-4 text-cyan-400" />}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {error && (
-        <div className="mb-6 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-          {error}
-        </div>
-      )}
-
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard
-          icon={CircleDollarSign}
-          label="Revenue"
-          value={formatValue(stats.revenue)}
-          change={stats.revenueChange}
-        />
-
-        <KpiCard
-          icon={Target}
-          label="Conversion Rate"
-          value={`${stats.conversion.toFixed(1)}%`}
-          change={stats.conversionChange}
-        />
-
-        <KpiCard
-          icon={TrendingUp}
-          label="Active Deals"
-          value={String(stats.activeDeals)}
-          change={stats.dealsChange}
-        />
-
-        <KpiCard
-          icon={Users}
-          label="New Leads"
-          value={String(stats.newLeads)}
-          change={stats.leadsChange}
-        />
-      </div>
-
-      <div className="mt-5 grid gap-5 xl:grid-cols-[1.65fr_1fr]">
-        <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
-          <div className="mb-6 flex items-start justify-between">
-            <div>
-              <h2 className="text-base font-semibold text-white">Revenue Trend</h2>
-
-              <p className="mt-1 text-xs text-zinc-500">
-                Closed deals, {range === "Last 30 days" ? "5-day" : "15-day"} periods
-              </p>
-            </div>
-
-            <div className="flex items-center gap-4 text-xs">
-              <div className="flex items-center gap-2 text-zinc-400">
-                <span className="h-2 w-2 rounded-full bg-cyan-400" />
-                Revenue
-              </div>
-            </div>
-          </div>
-
-          <div className="h-[290px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart
-                data={stats.chart}
-                margin={{ top: 10, right: 10, left: -15, bottom: 0 }}
-              >
-                <defs>
-                  <linearGradient id="revenueFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#22d3ee" stopOpacity={0.35} />
-                    <stop offset="95%" stopColor="#22d3ee" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-
-                <CartesianGrid
-                  strokeDasharray="3 3"
-                  stroke="rgba(255,255,255,0.06)"
-                  vertical={false}
-                />
-
-                <XAxis
-                  dataKey="name"
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fill: "#71717a", fontSize: 11 }}
-                />
-
-                <YAxis
-                  axisLine={false}
-                  tickLine={false}
-                  tick={{ fill: "#71717a", fontSize: 11 }}
-                  tickFormatter={(value) => `₹${value}L`}
-                />
-
-                <Tooltip
-                  contentStyle={{
-                    background: "#10141b",
-                    border: "1px solid rgba(255,255,255,0.1)",
-                    borderRadius: "12px",
-                    color: "#fff",
-                  }}
-                  formatter={(value) => [`₹${Number(value).toFixed(1)}L`, "Revenue"]}
-                />
-
-                <Area
-                  type="monotone"
-                  dataKey="revenue"
-                  stroke="#22d3ee"
-                  strokeWidth={2.5}
-                  fill="url(#revenueFill)"
-                  dot={false}
-                  activeDot={{ r: 5, fill: "#22d3ee" }}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-
-          <div className="mt-4 flex items-center justify-between border-t border-white/[0.06] pt-4">
-            <div>
-              <p className="text-[11px] uppercase tracking-wider text-zinc-600">Period</p>
-              <p className="mt-1 text-sm font-medium text-zinc-300">{range}</p>
-            </div>
-
-            <div className="text-right">
-              <p className="text-[11px] uppercase tracking-wider text-zinc-600">Revenue</p>
-              <p className="mt-1 text-sm font-semibold text-cyan-400">
-                {formatValue(stats.revenue)}
-              </p>
-            </div>
-          </div>
         </div>
 
-        <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
-          <div className="mb-6">
-            <h2 className="text-base font-semibold text-white">Pipeline Overview</h2>
-
-            <p className="mt-1 text-xs text-zinc-500">All leads across stages</p>
+        {error && (
+          <div className="mb-5 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+            Data load error: {error}
           </div>
+        )}
 
-          <div className="mb-7">
-            <p className="text-xs text-zinc-500">
-              Pipeline Value · {stats.pipelineDeals} active deal
-              {stats.pipelineDeals === 1 ? "" : "s"}
-            </p>
+        {loading ? (
+          <p className="py-20 text-center text-sm text-zinc-500">
+            Loading dashboard...
+          </p>
+        ) : (
+          <>
+            {/* KPI cards */}
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <Metric
+                title="Total Revenue"
+                value={data.revenue}
+                change={`${Math.abs(data.revenueChangeNum).toFixed(1)}%`}
+                positive={data.revenueChangeNum >= 0}
+                icon={<CircleDollarSign size={18} />}
+              />
 
-            <p className="mt-1 text-3xl font-semibold tracking-tight text-white">
-              {formatValue(stats.pipelineValue)}
-            </p>
-          </div>
+              <Metric
+                title="Conversion Rate"
+                value={data.conversion}
+                change={`${Math.abs(data.conversionDiff).toFixed(1)}%`}
+                positive={data.conversionDiff >= 0}
+                icon={<TrendingUp size={18} />}
+              />
 
-          <div className="space-y-5">
-            {stats.stages.map((stage) => (
-              <div key={stage.name}>
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-xs text-zinc-400">{stage.name}</span>
+              <Metric
+                title="Active Deals"
+                value={data.activeDeals}
+                change={`${Math.abs(data.activeDiff)}`}
+                positive={data.activeDiff >= 0}
+                icon={<Target size={18} />}
+              />
 
-                  <span className="text-xs font-medium text-zinc-300">{stage.value}</span>
-                </div>
-
-                <div className="h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
-                  <div
-                    className="h-full rounded-full bg-cyan-400 transition-all duration-500"
-                    style={{ width: `${stage.percentage}%` }}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="mt-5 grid gap-5 xl:grid-cols-[1.4fr_1fr]">
-        <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
-          <div className="mb-6 flex items-center justify-between">
-            <div>
-              <h2 className="text-base font-semibold text-white">Recent Activity</h2>
-
-              <p className="mt-1 text-xs text-zinc-500">Latest updates from your team</p>
+              <Metric
+                title="New Leads"
+                value={data.newLeads}
+                change={`${Math.abs(data.leadsChangeNum).toFixed(1)}%`}
+                positive={data.leadsChangeNum >= 0}
+                icon={<Users size={18} />}
+              />
             </div>
 
-            <Link
-              href="/real-estate/team-performance"
-              className="text-xs font-medium text-cyan-400 transition hover:text-cyan-300"
-            >
-              View all
-            </Link>
-          </div>
+            {/* Revenue + Pipeline */}
+            <div className="mt-6 grid gap-6 xl:grid-cols-[1.65fr_1fr]">
+              {/* Revenue chart */}
+              <section className="rounded-2xl border border-white/[0.09] bg-[#0b0e12] p-5 md:p-6">
+                <div className="mb-7 flex items-start justify-between">
+                  <div>
+                    <h3 className="font-semibold text-white">
+                      Revenue Trend
+                    </h3>
 
-          <div className="space-y-1">
-            {activities.map((activity) => {
-              const Icon = activity.icon;
-
-              return (
-                <div
-                  key={activity.key}
-                  className="flex items-center gap-4 rounded-xl px-3 py-3 transition hover:bg-white/[0.03]"
-                >
-                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03]">
-                    <Icon className="h-4 w-4 text-cyan-400" />
-                  </div>
-
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-zinc-200">{activity.title}</p>
-
-                    <p className="mt-1 truncate text-xs text-zinc-500">
-                      {activity.description}
+                    <p className="mt-1 text-sm text-zinc-500">
+                      {range} performance vs target
                     </p>
                   </div>
 
-                  <span className="shrink-0 text-[11px] text-zinc-600">
-                    {timeAgo(activity.at)}
+                  <div className="hidden items-center gap-4 text-xs text-zinc-500 sm:flex">
+                    <span className="flex items-center gap-1.5">
+                      <i className="h-2 w-2 rounded-full bg-cyan-400" />
+                      Revenue
+                    </span>
+
+                    <span className="flex items-center gap-1.5">
+                      <i className="h-2 w-2 rounded-full bg-emerald-400" />
+                      Target
+                    </span>
+                  </div>
+                </div>
+
+                <div className="h-[275px]">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart data={data.chart}>
+                      <defs>
+                        <linearGradient
+                          id="revenueGradient"
+                          x1="0"
+                          y1="0"
+                          x2="0"
+                          y2="1"
+                        >
+                          <stop
+                            offset="0%"
+                            stopColor="#06b6d4"
+                            stopOpacity={0.3}
+                          />
+
+                          <stop
+                            offset="100%"
+                            stopColor="#06b6d4"
+                            stopOpacity={0}
+                          />
+                        </linearGradient>
+                      </defs>
+
+                      <CartesianGrid
+                        stroke="rgba(255,255,255,.06)"
+                        strokeDasharray="3 3"
+                        vertical={false}
+                      />
+
+                      <XAxis
+                        dataKey="month"
+                        stroke="#52525b"
+                        tickLine={false}
+                        axisLine={false}
+                      />
+
+                      <YAxis
+                        stroke="#52525b"
+                        tickLine={false}
+                        axisLine={false}
+                        tickFormatter={(value) => `₹${value}L`}
+                      />
+
+                      <Tooltip
+                        contentStyle={{
+                          background: "#11161b",
+                          border: "1px solid rgba(255,255,255,.1)",
+                          borderRadius: 12,
+                          color: "white",
+                        }}
+                        formatter={(value, name) => [
+                          `₹${value}L`,
+                          name === "revenue" ? "Revenue" : "Target",
+                        ]}
+                      />
+
+                      <Area
+                        type="monotone"
+                        dataKey="target"
+                        stroke="#22c55e"
+                        strokeWidth={2}
+                        fill="none"
+                      />
+
+                      <Area
+                        type="monotone"
+                        dataKey="revenue"
+                        stroke="#06b6d4"
+                        strokeWidth={2.5}
+                        fill="url(#revenueGradient)"
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                </div>
+              </section>
+
+              {/* Lead Pipeline */}
+              <section className="rounded-2xl border border-white/[0.09] bg-[#0b0e12] p-5 md:p-6">
+                <h3 className="font-semibold text-white">Lead Pipeline</h3>
+
+                <p className="mt-1 text-sm text-zinc-500">
+                  Distribution by stage · {range}
+                </p>
+
+                <div className="mt-7 space-y-6">
+                  {data.stages.map((stage) => (
+                    <div key={stage.name}>
+                      <div className="mb-2 flex items-center justify-between text-sm">
+                        <span className="font-medium">{stage.name}</span>
+
+                        <span className="text-xs text-zinc-500">
+                          {stage.count}
+
+                          <b className="ml-2 font-medium text-zinc-300">
+                            {stage.percent}%
+                          </b>
+                        </span>
+                      </div>
+
+                      <div className="h-2 overflow-hidden rounded-full bg-white/[0.07]">
+                        <div
+                          className="h-full rounded-full transition-all duration-500"
+                          style={{
+                            width: `${stage.percent}%`,
+                            background: stage.color,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-7 flex items-end justify-between border-t border-white/[0.08] pt-5">
+                  <span className="text-sm text-zinc-500">
+                    Active deals value
+                  </span>
+
+                  <span className="text-2xl font-semibold">
+                    {data.pipeline}
                   </span>
                 </div>
-              );
-            })}
-
-            {!loading && activities.length === 0 && (
-              <p className="py-8 text-center text-sm text-zinc-500">No activity yet.</p>
-            )}
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
-          <div className="mb-6">
-            <h2 className="text-base font-semibold text-white">Quick Stats</h2>
-
-            <p className="mt-1 text-xs text-zinc-500">
-              Business snapshot for {range.toLowerCase()}
-            </p>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <QuickStat icon={Building2} label="Properties" value={String(properties.length)} />
-            <QuickStat icon={CalendarDays} label="Site Visits" value={String(stats.siteVisits)} />
-            <QuickStat icon={Users} label="Total Leads" value={String(leads.length)} />
-            <QuickStat
-              icon={CircleDollarSign}
-              label="Closed Deals"
-              value={String(stats.closedDeals)}
-            />
-          </div>
-
-          <div className="mt-4 rounded-xl border border-cyan-400/10 bg-cyan-400/[0.04] p-4">
-            <div className="flex items-center gap-2">
-              <TrendingUp className="h-4 w-4 text-cyan-400" />
-
-              <span className="text-xs font-medium text-cyan-300">Revenue growth</span>
+              </section>
             </div>
 
-            <p className="mt-2 text-2xl font-semibold text-white">
-              {growth.label === "New" ? "New" : `${growth.up ? "+" : "-"}${growth.label}`}
-            </p>
+            {/* Recent Deals */}
+            <section className="mt-6 overflow-hidden rounded-2xl border border-white/[0.09] bg-[#0b0e12]">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/[0.08] px-5 py-5 md:px-6">
+                <div>
+                  <h3 className="font-semibold text-white">Recent Deals</h3>
 
-            <p className="mt-1 text-xs leading-5 text-zinc-500">
-              Compared with the previous period.
-            </p>
-          </div>
-        </div>
+                  <p className="mt-1 text-sm text-zinc-500">
+                    Latest activity across your pipeline
+                  </p>
+                </div>
+
+                <a
+                  href="/real-estate/deals"
+                  className="text-sm font-medium text-cyan-400 transition hover:text-cyan-300"
+                >
+                  View all <ArrowUpRight size={14} className="inline" />
+                </a>
+              </div>
+
+              {/* Search */}
+              <div className="border-b border-white/[0.06] px-5 py-4 md:px-6">
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search deals..."
+                  className="w-full max-w-sm rounded-xl border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-sm text-white outline-none placeholder:text-zinc-600 focus:border-cyan-400/50"
+                />
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[680px] text-left">
+                  <thead className="text-[10px] uppercase tracking-[0.15em] text-zinc-600">
+                    <tr>
+                      <th className="px-5 py-4 font-medium md:px-6">Client</th>
+                      <th className="px-5 py-4 font-medium">Property</th>
+                      <th className="px-5 py-4 font-medium">Value</th>
+                      <th className="px-5 py-4 font-medium">Stage</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {filteredDeals.map((deal) => (
+                      <tr
+                        key={deal.id}
+                        className="border-t border-white/[0.06] transition hover:bg-white/[0.02]"
+                      >
+                        <td className="px-5 py-4 md:px-6">
+                          <div className="flex items-center gap-3">
+                            <span className="flex h-9 w-9 items-center justify-center rounded-full bg-cyan-400/10 text-xs font-semibold text-cyan-300">
+                              {initialsOf(deal.client_name ?? "")}
+                            </span>
+
+                            <span className="text-sm font-medium">
+                              {deal.client_name ?? "—"}
+                            </span>
+                          </div>
+                        </td>
+
+                        <td className="px-5 py-4 text-sm text-zinc-400">
+                          {deal.property_name ?? "—"}
+                        </td>
+
+                        <td className="px-5 py-4 text-sm font-medium">
+                          {formatMoney(Number(deal.deal_value ?? 0))}
+                        </td>
+
+                        <td className="px-5 py-4">
+                          <span className="rounded-full bg-white/[0.06] px-2.5 py-1 text-xs text-zinc-300">
+                            {capitalize(deal.status ?? "")}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                {filteredDeals.length === 0 && (
+                  <p className="px-6 py-12 text-center text-sm text-zinc-500">
+                    No matching deals found.
+                  </p>
+                )}
+              </div>
+            </section>
+
+            {/* Quick Stats */}
+            <div className="mt-6 grid gap-6 md:grid-cols-3">
+              <MiniCard
+                icon={<CalendarDays size={18} />}
+                title="Site visits today"
+                value={String(data.visitsToday)}
+                note={`${data.visitsPending} still scheduled`}
+              />
+
+              <MiniCard
+                icon={<Building2 size={18} />}
+                title="Available properties"
+                value={String(data.availableProps)}
+                note={`Out of ${data.totalProps} total properties`}
+              />
+
+              <MiniCard
+                icon={<FileText size={18} />}
+                title="Deals closed"
+                value={String(data.closedCount)}
+                note={`${data.activeAllCount} deals still active`}
+              />
+            </div>
+          </>
+        )}
       </div>
-    </div>
-  );
-}
-
-function KpiCard({
-  icon: Icon,
-  label,
-  value,
-  change,
-}: {
-  icon: React.ElementType;
-  label: string;
-  value: string;
-  change: Change;
-}) {
-  const Arrow = change.up ? ArrowUpRight : ArrowDownRight;
-
-  return (
-    <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-5">
-      <div className="flex items-start justify-between">
-        <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03]">
-          <Icon className="h-4 w-4 text-cyan-400" />
-        </div>
-
-        <div
-          className={`flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium ${
-            change.up ? "bg-emerald-400/10 text-emerald-400" : "bg-red-400/10 text-red-400"
-          }`}
-        >
-          <Arrow className="h-3 w-3" />
-          {change.label}
-        </div>
-      </div>
-
-      <p className="mt-5 text-xs text-zinc-500">{label}</p>
-
-      <p className="mt-1 text-2xl font-semibold tracking-tight text-white">{value}</p>
-
-      <p className="mt-1 text-[11px] text-zinc-600">vs previous period</p>
-    </div>
-  );
-}
-
-function QuickStat({
-  icon: Icon,
-  label,
-  value,
-}: {
-  icon: React.ElementType;
-  label: string;
-  value: string;
-}) {
-  return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
-      <div className="flex items-center gap-2">
-        <Icon className="h-4 w-4 text-zinc-500" />
-
-        <span className="text-xs text-zinc-500">{label}</span>
-      </div>
-
-      <p className="mt-3 text-xl font-semibold text-white">{value}</p>
-    </div>
+    </>
   );
 }

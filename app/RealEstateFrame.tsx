@@ -19,6 +19,8 @@ import {
   ChevronRight,
 } from "lucide-react";
 
+import { useProfileName } from "@/lib/useProfileName";
+
 const links = [
   ["Overview", "/real-estate", LayoutDashboard],
   ["Leads", "/real-estate/leads", Target],
@@ -44,6 +46,13 @@ const subtitles: Record<string, string> = {
   Settings: "Manage dashboard preferences",
 };
 
+function getInitials(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return "RE";
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
 export default function RealEstateFrame({
   children,
   title,
@@ -55,6 +64,7 @@ export default function RealEstateFrame({
 }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const profileName = useProfileName();
 
   const activeLink = links.find(([, href]) => {
     if (href === "/real-estate") {
@@ -64,8 +74,15 @@ export default function RealEstateFrame({
     return pathname === href || pathname.startsWith(`${href}/`);
   });
 
-  const activeTitle = activeLink?.[0] ?? "Overview";
-  const activesubtitle = subtitles[activeTitle] ?? "Realty operations dashboard";
+  const isSettings =
+    pathname === "/real-estate/settings" ||
+    pathname.startsWith("/real-estate/settings/");
+
+  const activeTitle = isSettings ? "Settings" : activeLink?.[0] ?? "Overview";
+  const pageSubtitle =
+    subtitle ?? subtitles[activeTitle] ?? "Realty operations dashboard";
+
+  const displayName = profileName || "Real Estate Admin";
 
   return (
     <div className="min-h-screen bg-[#080b12] text-white">
@@ -114,13 +131,13 @@ export default function RealEstateFrame({
               <h1 className="text-xl font-semibold tracking-tight">
                 {activeTitle}
               </h1>
-              <p className="mt-1 text-xs text-white/40">{subtitle}</p>
+              <p className="mt-1 text-xs text-white/40">{pageSubtitle}</p>
             </div>
 
             <div className="flex items-center gap-3">
               <div className="hidden xl:block text-right">
                 <div className="text-xs font-medium text-white/80">
-                  Real Estate Admin
+                  {displayName}
                 </div>
                 <div className="text-[10px] text-white/35">
                   Management Portal
@@ -128,7 +145,7 @@ export default function RealEstateFrame({
               </div>
 
               <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-xs font-semibold">
-                RE
+                {getInitials(displayName)}
               </div>
             </div>
           </header>
@@ -136,7 +153,7 @@ export default function RealEstateFrame({
           {/* Mobile Page Heading */}
           <div className="lg:hidden border-b border-white/10 px-5 py-4">
             <h1 className="text-lg font-semibold">{activeTitle}</h1>
-            <p className="mt-1 text-xs text-white/40">{subtitle}</p>
+            <p className="mt-1 text-xs text-white/40">{pageSubtitle}</p>
           </div>
 
           {/* Page Content */}
@@ -154,6 +171,10 @@ function SidebarContent({
   pathname: string;
   onNavigate?: () => void;
 }) {
+  const settingsActive =
+    pathname === "/real-estate/settings" ||
+    pathname.startsWith("/real-estate/settings/");
+
   return (
     <>
       {/* Brand */}
@@ -216,16 +237,14 @@ function SidebarContent({
           href="/real-estate/settings"
           onClick={onNavigate}
           className={`group flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm transition ${
-            pathname === "/real-estate/settings" ||
-            pathname.startsWith("/real-estate/settings/")
+            settingsActive
               ? "bg-white/[0.09] text-white"
               : "text-white/45 hover:bg-white/[0.05] hover:text-white/80"
           }`}
         >
           <Settings className="h-[17px] w-[17px] text-white/35" />
           <span className="flex-1">Settings</span>
-          {(pathname === "/real-estate/settings" ||
-            pathname.startsWith("/real-estate/settings/")) && (
+          {settingsActive && (
             <ChevronRight className="h-3.5 w-3.5 text-white/35" />
           )}
         </Link>

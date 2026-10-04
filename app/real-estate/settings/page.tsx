@@ -17,6 +17,8 @@ import {
   EyeOff,
 } from "lucide-react";
 
+import { supabase } from "@/lib/supabaseClient";
+
 type SettingsTab =
   | "Profile"
   | "Company"
@@ -31,6 +33,8 @@ export default function SettingsPage() {
     useState<SettingsTab>("Profile");
 
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState("");
+  const [loading, setLoading] = useState(true);
 
   const [showPassword, setShowPassword] =
     useState(false);
@@ -38,12 +42,12 @@ export default function SettingsPage() {
   const [theme, setTheme] = useState<Theme>("dark");
 
   const [settings, setSettings] = useState({
-    name: "Rahul Mehta",
-    email: "rahul@example.com",
-    phone: "+91 98765 43210",
-    company: "UrbanNest Realty",
-    website: "www.urbannestrealty.com",
-    address: "Mumbai, Maharashtra",
+    name: "",
+    email: "",
+    phone: "",
+    company: "",
+    website: "",
+    address: "",
     currentPassword: "",
     newPassword: "",
     confirmPassword: "",
@@ -53,6 +57,56 @@ export default function SettingsPage() {
     dealNotifications: true,
     weeklyReports: false,
   });
+
+  // Load saved theme
+  useEffect(() => {
+    const stored = localStorage.getItem("realestate-theme");
+
+    if (stored === "light" || stored === "dark") {
+      setTheme(stored);
+      document.documentElement.setAttribute(
+        "data-dashboard-theme",
+        stored
+      );
+    }
+  }, []);
+
+  // Load settings from Supabase
+  useEffect(() => {
+    async function loadSettings() {
+      const { data, error } = await supabase
+        .from("settings")
+        .select("*")
+        .eq("id", 1)
+        .maybeSingle();
+
+      if (error) {
+        console.error(error);
+        setSaveError(error.message);
+      }
+
+      if (data) {
+        setSettings((prev) => ({
+          ...prev,
+          name: data.name ?? "",
+          email: data.email ?? "",
+          phone: data.phone ?? "",
+          company: data.company ?? "",
+          website: data.website ?? "",
+          address: data.address ?? "",
+          emailNotifications: data.email_notifications ?? true,
+          bookingNotifications: data.booking_notifications ?? true,
+          leadNotifications: data.lead_notifications ?? true,
+          dealNotifications: data.deal_notifications ?? true,
+          weeklyReports: data.weekly_reports ?? false,
+        }));
+      }
+
+      setLoading(false);
+    }
+
+    loadSettings();
+  }, []);
 
   const tabs = [
     {
@@ -89,7 +143,32 @@ export default function SettingsPage() {
     setSaved(false);
   }
 
-  function handleSave() {
+  async function handleSave() {
+    setSaveError("");
+
+    const { error } = await supabase.from("settings").upsert({
+      id: 1,
+      name: settings.name,
+      email: settings.email,
+      phone: settings.phone,
+      company: settings.company,
+      website: settings.website,
+      address: settings.address,
+      email_notifications: settings.emailNotifications,
+      booking_notifications: settings.bookingNotifications,
+      lead_notifications: settings.leadNotifications,
+      deal_notifications: settings.dealNotifications,
+      weekly_reports: settings.weeklyReports,
+    });
+
+    if (error) {
+      console.error(error);
+      setSaveError(error.message);
+      return;
+    }
+
+    window.dispatchEvent(new Event("profile-updated"));
+
     setSaved(true);
 
     setTimeout(() => {
@@ -98,16 +177,16 @@ export default function SettingsPage() {
   }
 
   function handleThemeChange(newTheme: Theme) {
-  setTheme(newTheme);
-  setSaved(false);
+    setTheme(newTheme);
+    setSaved(false);
 
-  document.documentElement.setAttribute(
-    "data-dashboard-theme",
-    newTheme
-  );
+    document.documentElement.setAttribute(
+      "data-dashboard-theme",
+      newTheme
+    );
 
-  localStorage.setItem("realestate-theme", newTheme);
-}
+    localStorage.setItem("realestate-theme", newTheme);
+  }
 
   return (
     <div
@@ -129,13 +208,7 @@ export default function SettingsPage() {
             Settings
           </h1>
 
-          <p
-            className={`mt-2 text-sm ${
-              theme === "light"
-                ? "text-zinc-500"
-                : "text-zinc-500"
-            }`}
-          >
+          <p className="mt-2 text-sm text-zinc-500">
             Manage your profile, company preferences and dashboard settings.
           </p>
         </div>
@@ -182,6 +255,12 @@ export default function SettingsPage() {
                 : "border-white/[0.09] bg-[#0b0e12]"
             }`}
           >
+
+            {loading && (
+              <p className="px-6 pt-6 text-xs text-zinc-500">
+                Loading settings...
+              </p>
+            )}
 
             {/* Profile */}
             {activeTab === "Profile" && (
@@ -582,6 +661,12 @@ export default function SettingsPage() {
                     Changes saved successfully
                   </div>
                 )}
+
+                {saveError && (
+                  <div className="text-xs text-rose-400">
+                    Error: {saveError}
+                  </div>
+                )}
               </div>
 
               <button
@@ -673,13 +758,7 @@ function Field({
 }) {
   return (
     <div>
-      <label
-        className={`mb-1.5 block text-xs ${
-          theme === "light"
-            ? "text-zinc-500"
-            : "text-zinc-500"
-        }`}
-      >
+      <label className="mb-1.5 block text-xs text-zinc-500">
         {label}
       </label>
 
