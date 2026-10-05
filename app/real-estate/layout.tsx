@@ -1,3 +1,4 @@
+import AuthGuard from "@/components/AuthGuard";
 import RealEstateFrame from "../RealEstateFrame";
 
 export default function RealEstateLayout({
@@ -5,5 +6,9 @@ export default function RealEstateLayout({
 }: {
   children: React.ReactNode;
 }) {
-  return <RealEstateFrame>{children}</RealEstateFrame>;
+  return (
+    <AuthGuard>
+      <RealEstateFrame>{children}</RealEstateFrame>
+    </AuthGuard>
+  );
 }

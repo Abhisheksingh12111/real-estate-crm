@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 import {
   LayoutDashboard,
@@ -17,8 +17,10 @@ import {
   Menu,
   X,
   ChevronRight,
+  LogOut,
 } from "lucide-react";
 
+import { supabase } from "@/lib/supabaseClient";
 import { useProfileName } from "@/lib/useProfileName";
 
 const links = [
@@ -108,7 +110,7 @@ export default function RealEstateFrame({
       {/* Mobile Sidebar */}
       {mobileOpen && (
         <div className="lg:hidden fixed inset-0 z-40 bg-black/60">
-          <div className="absolute left-0 top-16 bottom-0 w-[270px] border-r border-white/10 bg-[#0b0f18] p-4 overflow-y-auto">
+          <div className="absolute left-0 top-16 bottom-0 w-[270px] flex flex-col border-r border-white/10 bg-[#0b0f18] p-4 overflow-y-auto">
             <SidebarContent
               pathname={pathname}
               onNavigate={() => setMobileOpen(false)}
@@ -171,9 +173,16 @@ function SidebarContent({
   pathname: string;
   onNavigate?: () => void;
 }) {
+  const router = useRouter();
+
   const settingsActive =
     pathname === "/real-estate/settings" ||
     pathname.startsWith("/real-estate/settings/");
+
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    router.replace("/login");
+  }
 
   return (
     <>
@@ -248,6 +257,14 @@ function SidebarContent({
             <ChevronRight className="h-3.5 w-3.5 text-white/35" />
           )}
         </Link>
+
+        <button
+          onClick={handleLogout}
+          className="mt-1 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-white/45 transition hover:bg-rose-500/10 hover:text-rose-300"
+        >
+          <LogOut className="h-[17px] w-[17px]" />
+          <span className="flex-1 text-left">Logout</span>
+        </button>
       </div>
 
       {/* Bottom */}

@@ -39,6 +39,11 @@ export default function SettingsPage() {
   const [showPassword, setShowPassword] =
     useState(false);
 
+  // Password change state
+  const [pwLoading, setPwLoading] = useState(false);
+  const [pwError, setPwError] = useState("");
+  const [pwSuccess, setPwSuccess] = useState("");
+
   const [theme, setTheme] = useState<Theme>("dark");
 
   const [settings, setSettings] = useState({
@@ -174,6 +179,83 @@ export default function SettingsPage() {
     setTimeout(() => {
       setSaved(false);
     }, 2500);
+  }
+
+  // Asli login password badalta hai (Supabase Auth)
+  async function handleChangePassword() {
+    setPwError("");
+    setPwSuccess("");
+
+    const { currentPassword, newPassword, confirmPassword } = settings;
+
+    if (!currentPassword || !newPassword || !confirmPassword) {
+      setPwError("Please fill in all three password fields.");
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      setPwError("New password must be at least 6 characters.");
+      return;
+    }
+
+    if (newPassword !== confirmPassword) {
+      setPwError("New password and confirm password do not match.");
+      return;
+    }
+
+    if (newPassword === currentPassword) {
+      setPwError("New password must be different from the current one.");
+      return;
+    }
+
+    setPwLoading(true);
+
+    // Logged-in user ki email nikalo
+    const { data: userData, error: userErr } = await supabase.auth.getUser();
+    const authEmail = userData.user?.email;
+
+    if (userErr || !authEmail) {
+      setPwError("Session not found. Please log in again.");
+      setPwLoading(false);
+      return;
+    }
+
+    // Current password verify karo
+    const { error: verifyErr } = await supabase.auth.signInWithPassword({
+      email: authEmail,
+      password: currentPassword,
+    });
+
+    if (verifyErr) {
+      setPwError("Current password is incorrect.");
+      setPwLoading(false);
+      return;
+    }
+
+    // Naya password set karo
+    const { error: updateErr } = await supabase.auth.updateUser({
+      password: newPassword,
+    });
+
+    if (updateErr) {
+      setPwError(updateErr.message);
+      setPwLoading(false);
+      return;
+    }
+
+    setSettings((prev) => ({
+      ...prev,
+      currentPassword: "",
+      newPassword: "",
+      confirmPassword: "",
+    }));
+
+    setPwSuccess("Password updated successfully.");
+    setPwLoading(false);
+
+    setTimeout(() => {
+      setPwSuccess("");
+    }, 4000);
   }
 
   function handleThemeChange(newTheme: Theme) {
@@ -502,6 +584,29 @@ export default function SettingsPage() {
                     }
                     theme={theme}
                   />
+
+                  {pwError && (
+                    <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-xs text-rose-300">
+                      {pwError}
+                    </div>
+                  )}
+
+                  {pwSuccess && (
+                    <div className="flex items-center gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-xs text-emerald-300">
+                      <Check size={14} />
+                      {pwSuccess}
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={handleChangePassword}
+                    disabled={pwLoading}
+                    className="flex items-center gap-2 rounded-xl bg-cyan-400 px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-cyan-300 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <Lock size={15} />
+                    {pwLoading ? "Updating..." : "Update Password"}
+                  </button>
 
                   <div
                     className={`rounded-xl border p-4 ${
