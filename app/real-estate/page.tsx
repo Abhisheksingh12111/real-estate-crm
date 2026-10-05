@@ -55,11 +55,6 @@ type Property = {
   status: string | null;
 };
 
-type MonthlyTarget = {
-  month: string;
-  expected_revenue: number | null;
-};
-
 const DAY = 86400000;
 
 function startOfToday() {
@@ -79,10 +74,6 @@ function ymd(d: Date) {
     2,
     "0"
   )}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function monthKey(d: Date) {
-  return ymd(d).slice(0, 7);
 }
 
 function formatMoney(n: number) {
@@ -193,7 +184,6 @@ export default function RealEstateDashboard() {
   const [deals, setDeals] = useState<Deal[]>([]);
   const [visits, setVisits] = useState<Visit[]>([]);
   const [properties, setProperties] = useState<Property[]>([]);
-  const [targets, setTargets] = useState<MonthlyTarget[]>([]);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -205,18 +195,16 @@ export default function RealEstateDashboard() {
     let active = true;
 
     async function load() {
-      const [leadsRes, dealsRes, visitsRes, propsRes, targetsRes] =
-        await Promise.all([
-          supabase.from("leads").select("id,status,created_at"),
-          supabase
-            .from("deals")
-            .select(
-              "id,client_name,property_name,deal_value,status,deal_date,created_at"
-            ),
-          supabase.from("site_visits").select("id,visit_date,status"),
-          supabase.from("properties").select("id,status"),
-          supabase.from("monthly_targets").select("*"),
-        ]);
+      const [leadsRes, dealsRes, visitsRes, propsRes] = await Promise.all([
+        supabase.from("leads").select("id,status,created_at"),
+        supabase
+          .from("deals")
+          .select(
+            "id,client_name,property_name,deal_value,status,deal_date,created_at"
+          ),
+        supabase.from("site_visits").select("id,visit_date,status"),
+        supabase.from("properties").select("id,status"),
+      ]);
 
       if (!active) return;
 
@@ -232,9 +220,6 @@ export default function RealEstateDashboard() {
       setDeals((dealsRes.data as Deal[]) ?? []);
       setVisits((visitsRes.data as Visit[]) ?? []);
       setProperties((propsRes.data as Property[]) ?? []);
-      setTargets(
-        targetsRes.error ? [] : ((targetsRes.data as MonthlyTarget[]) ?? [])
-      );
       setLoading(false);
     }
 
@@ -297,43 +282,37 @@ export default function RealEstateDashboard() {
     const activeAll = deals.filter((d) => d.status === "active");
     const pipelineValue = activeAll.reduce((s, d) => s + value(d), 0);
 
-    // Chart buckets
-    const buckets = days === 30 ? 4 : 3;
+    // Chart: cumulative revenue vs target (smooth, growing trendline)
+    // Target = pichle period se 10% zyada (agar pichla period 0 tha to
+    // current ka 85%). Chahe to 1.1 ya 0.85 change kar sakte ho.
+    const buckets = days === 30 ? 10 : 12;
     const size = (days * DAY) / buckets;
+    const targetTotal = revPrev > 0 ? revPrev * 1.1 : revCur * 0.85;
 
-    const targetMap = new Map<string, number>();
-    targets.forEach((t) => {
-      const raw = String(t.month ?? "");
-      let key = /^\d{4}-\d{2}/.test(raw) ? raw.slice(0, 7) : "";
-      if (!key) {
-        const d = toDate(raw);
-        if (d) key = monthKey(d);
-      }
-      if (key) targetMap.set(key, Number(t.expected_revenue ?? 0));
-    });
+    let running = 0;
 
     const chart = Array.from({ length: buckets }, (_, i) => {
       const bStart = start + i * size;
       const bEnd = bStart + size;
       const endDate = new Date(bEnd - DAY);
 
-      const revenue = closedCur
+      const bucketRevenue = closedCur
         .filter((d) => {
           const t = dealDate(d)?.getTime() ?? 0;
           return t >= bStart && t < bEnd;
         })
         .reduce((s, d) => s + value(d), 0);
 
-      const monthlyTarget = targetMap.get(monthKey(endDate)) ?? 0;
-      const target = days === 30 ? monthlyTarget / 4 : monthlyTarget;
+      running += bucketRevenue;
 
       return {
-        month:
-          days === 30
-            ? `Week ${i + 1}`
-            : endDate.toLocaleDateString("en-IN", { month: "short" }),
-        revenue: Math.round((revenue / 100000) * 10) / 10,
-        target: Math.round((target / 100000) * 10) / 10,
+        label: endDate.toLocaleDateString("en-IN", {
+          day: "numeric",
+          month: "short",
+        }),
+        revenue: Math.round((running / 100000) * 10) / 10,
+        target:
+          Math.round(((targetTotal * (i + 1)) / buckets / 100000) * 10) / 10,
       };
     });
 
@@ -389,7 +368,7 @@ export default function RealEstateDashboard() {
       closedCount: closedCur.length,
       activeAllCount: activeAll.length,
     };
-  }, [range, leads, deals, visits, properties, targets]);
+  }, [range, leads, deals, visits, properties]);
 
   const filteredDeals = useMemo(() => {
     const query = search.toLowerCase().trim();
@@ -508,12 +487,12 @@ export default function RealEstateDashboard() {
 
                   <div className="hidden items-center gap-4 text-xs text-zinc-500 sm:flex">
                     <span className="flex items-center gap-1.5">
-                      <i className="h-2 w-2 rounded-full bg-cyan-400" />
+                      <i className="h-2 w-2 rounded-full bg-sky-400" />
                       Revenue
                     </span>
 
                     <span className="flex items-center gap-1.5">
-                      <i className="h-2 w-2 rounded-full bg-emerald-400" />
+                      <i className="h-2 w-2 rounded-full bg-green-500" />
                       Target
                     </span>
                   </div>
@@ -521,7 +500,10 @@ export default function RealEstateDashboard() {
 
                 <div className="h-[275px]">
                   <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={data.chart}>
+                    <AreaChart
+                      data={data.chart}
+                      margin={{ top: 10, right: 20, left: 0, bottom: 0 }}
+                    >
                       <defs>
                         <linearGradient
                           id="revenueGradient"
@@ -532,13 +514,33 @@ export default function RealEstateDashboard() {
                         >
                           <stop
                             offset="0%"
-                            stopColor="#06b6d4"
-                            stopOpacity={0.3}
+                            stopColor="#0ea5e9"
+                            stopOpacity={0.35}
                           />
 
                           <stop
                             offset="100%"
-                            stopColor="#06b6d4"
+                            stopColor="#0ea5e9"
+                            stopOpacity={0}
+                          />
+                        </linearGradient>
+
+                        <linearGradient
+                          id="targetGradient"
+                          x1="0"
+                          y1="0"
+                          x2="0"
+                          y2="1"
+                        >
+                          <stop
+                            offset="0%"
+                            stopColor="#22c55e"
+                            stopOpacity={0.25}
+                          />
+
+                          <stop
+                            offset="100%"
+                            stopColor="#22c55e"
                             stopOpacity={0}
                           />
                         </linearGradient>
@@ -546,21 +548,26 @@ export default function RealEstateDashboard() {
 
                       <CartesianGrid
                         stroke="rgba(255,255,255,.06)"
-                        strokeDasharray="3 3"
+                        strokeDasharray="2 6"
                         vertical={false}
                       />
 
                       <XAxis
-                        dataKey="month"
-                        stroke="#52525b"
+                        dataKey="label"
+                        tick={{ fill: "#6b7280", fontSize: 12 }}
                         tickLine={false}
                         axisLine={false}
+                        tickMargin={10}
+                        minTickGap={16}
+                        padding={{ left: 24, right: 24 }}
                       />
 
                       <YAxis
-                        stroke="#52525b"
+                        tick={{ fill: "#6b7280", fontSize: 12 }}
                         tickLine={false}
                         axisLine={false}
+                        width={56}
+                        domain={[0, "auto"]}
                         tickFormatter={(value) => `₹${value}L`}
                       />
 
@@ -573,24 +580,30 @@ export default function RealEstateDashboard() {
                         }}
                         formatter={(value, name) => [
                           `₹${value}L`,
-                          name === "revenue" ? "Revenue" : "Target",
+                          String(name).charAt(0).toUpperCase() +
+                            String(name).slice(1),
                         ]}
                       />
 
+                      {/* Target pehle, taaki revenue upar dikhe */}
                       <Area
                         type="monotone"
                         dataKey="target"
                         stroke="#22c55e"
                         strokeWidth={2}
-                        fill="none"
+                        fill="url(#targetGradient)"
+                        dot={false}
+                        activeDot={{ r: 4 }}
                       />
 
                       <Area
                         type="monotone"
                         dataKey="revenue"
-                        stroke="#06b6d4"
-                        strokeWidth={2.5}
+                        stroke="#0ea5e9"
+                        strokeWidth={2}
                         fill="url(#revenueGradient)"
+                        dot={false}
+                        activeDot={{ r: 5 }}
                       />
                     </AreaChart>
                   </ResponsiveContainer>
