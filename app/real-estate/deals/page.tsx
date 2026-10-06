@@ -55,7 +55,13 @@ type DbRow = {
 };
 
 type LeadOption = { id: Id; name: string };
-type PropertyOption = { id: Id; title: string; price: number | null };
+type PropertyOption = {
+  id: Id;
+  title: string;
+  price: number | null;
+  available_units: number | null;
+  total_units: number | null;
+};
 
 type FormState = {
   leadId: string;
@@ -197,7 +203,10 @@ export default function DealsPage() {
   async function fetchOptions() {
     const [l, p] = await Promise.all([
       supabase.from("leads").select("id, name").order("name"),
-      supabase.from("properties").select("id, title, price").order("title"),
+      supabase
+        .from("properties")
+        .select("id, title, price, available_units, total_units")
+        .order("title"),
     ]);
     if (l.data) setLeads(l.data as LeadOption[]);
     if (p.data) setProperties(p.data as PropertyOption[]);
@@ -207,6 +216,33 @@ export default function DealsPage() {
     fetchDeals();
     fetchOptions();
   }, []);
+
+  // Overselling guard: kya is property mein abhi unit bachi hai?
+  async function hasUnitsLeft(propertyId: Id | null, existing: Deal | null) {
+    if (propertyId === null) return true;
+
+    // Ye deal pehle se isi property par Closed hai, to naya unit nahi lag raha
+    if (
+      existing &&
+      existing.dealStatus === "Closed" &&
+      String(existing.propertyId) === String(propertyId)
+    ) {
+      return true;
+    }
+
+    const { data, error } = await supabase
+      .from("properties")
+      .select("available_units")
+      .eq("id", propertyId)
+      .single();
+
+    if (error) {
+      setError(error.message);
+      return false;
+    }
+
+    return (data?.available_units ?? 0) > 0;
+  }
 
   const filteredDeals = deals.filter((deal) => {
     const matchesSearch =
@@ -289,6 +325,18 @@ export default function DealsPage() {
 
     if (!lead || !property || !form.value) return false;
 
+    // Sold-out property par deal close nahi ho sakti
+    if (form.dealStatus === "Closed") {
+      const ok = await hasUnitsLeft(property.id, existing);
+
+      if (!ok) {
+        setError(
+          `"${property.title}" ki saari units bik chuki hain, isliye ye deal close nahi ho sakti.`
+        );
+        return false;
+      }
+    }
+
     const payload = {
       lead_id: lead.id,
       property_id: property.id,
@@ -315,6 +363,7 @@ export default function DealsPage() {
 
     setError(null);
     fetchDeals();
+    fetchOptions();
     return true;
   }
 
@@ -374,6 +423,7 @@ export default function DealsPage() {
     if (showDetails?.id === deal.id) setShowDetails(null);
 
     fetchDeals();
+    fetchOptions();
   }
 
   async function cyclePaymentStatus(deal: Deal) {
@@ -411,6 +461,18 @@ export default function DealsPage() {
 
     const updated = next[deal.dealStatus];
 
+    // Closed karne se pehle check: unit bachi hai ya nahi
+    if (updated === "Closed") {
+      const ok = await hasUnitsLeft(deal.propertyId, deal);
+
+      if (!ok) {
+        setError(
+          `"${deal.property}" ki saari units bik chuki hain, isliye ye deal close nahi ho sakti.`
+        );
+        return;
+      }
+    }
+
     const { error } = await supabase
       .from("deals")
       .update({ status: updated.toLowerCase() })
@@ -425,7 +487,9 @@ export default function DealsPage() {
       setShowDetails({ ...deal, dealStatus: updated });
     }
 
+    setError(null);
     fetchDeals();
+    fetchOptions();
   }
 
   function getDealById(id: number) {
@@ -736,6 +800,7 @@ export default function DealsPage() {
               setForm={setForm}
               leads={leads}
               properties={properties}
+              currentPropertyId=""
               onSubmit={handleAddDeal}
               submitLabel={saving ? "Saving..." : "Create Deal"}
               saving={saving}
@@ -775,6 +840,9 @@ export default function DealsPage() {
               setForm={setForm}
               leads={leads}
               properties={properties}
+              currentPropertyId={
+                editingDeal.propertyId !== null ? String(editingDeal.propertyId) : ""
+              }
               onSubmit={handleEditDeal}
               submitLabel={saving ? "Saving..." : "Save Changes"}
               saving={saving}
@@ -853,6 +921,7 @@ type DealFormProps = {
   setForm: React.Dispatch<React.SetStateAction<FormState>>;
   leads: LeadOption[];
   properties: PropertyOption[];
+  currentPropertyId: string;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   submitLabel: string;
   saving: boolean;
@@ -864,6 +933,7 @@ function DealForm({
   setForm,
   leads,
   properties,
+  currentPropertyId,
   onSubmit,
   submitLabel,
   saving,
@@ -910,11 +980,18 @@ function DealForm({
           className="w-full rounded-xl border border-white/10 bg-[#181818] px-3 py-2.5 text-sm text-white outline-none"
         >
           <option value="">Select property</option>
-          {properties.map((p) => (
-            <option key={String(p.id)} value={String(p.id)}>
-              {p.title}
-            </option>
-          ))}
+          {properties.map((p) => {
+            const left = p.available_units ?? 0;
+            const soldOut = left <= 0;
+            // Is deal ki apni property hamesha selectable rahe
+            const disabled = soldOut && String(p.id) !== currentPropertyId;
+
+            return (
+              <option key={String(p.id)} value={String(p.id)} disabled={disabled}>
+                {soldOut ? `${p.title} (Sold out)` : `${p.title} · ${left} left`}
+              </option>
+            );
+          })}
         </select>
       </div>
 

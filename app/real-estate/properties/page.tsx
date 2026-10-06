@@ -13,8 +13,12 @@ import {
   Eye,
   Pencil,
   Trash2,
+  ImagePlus,
 } from "lucide-react";
-import { supabase } from "@/lib/supabaseClient"; // Leads page mein jo import hai wahi path use kar
+import { supabase } from "@/lib/supabaseClient";
+import { compressImage } from "@/lib/compressImage";
+
+const BUCKET = "property-images";
 
 type PropertyStatus = "Active" | "Coming Soon" | "Sold Out";
 type PropertyType = "Apartment" | "Villa" | "Plots" | "Commercial";
@@ -28,6 +32,7 @@ type Property = {
   available: number;
   price: number;
   status: PropertyStatus;
+  imagePath: string | null;
 };
 
 type DbRow = {
@@ -38,17 +43,26 @@ type DbRow = {
   total_units: number | null;
   available_units: number | null;
   price: number | null;
-  status: PropertyStatus;
+  status: string | null;
+  image_path: string | null;
 };
 
 const TYPES: PropertyType[] = ["Apartment", "Villa", "Plots", "Commercial"];
-const STATUSES: PropertyStatus[] = ["Active", "Coming Soon", "Sold Out"];
+// "Sold Out" automatic hai (deals se), isliye form mein nahi dikhta
+const FORM_STATUSES: PropertyStatus[] = ["Active", "Coming Soon"];
 
 const statusStyles: Record<PropertyStatus, string> = {
   Active: "bg-emerald-400/10 text-emerald-400",
   "Coming Soon": "bg-amber-400/10 text-amber-400",
   "Sold Out": "bg-zinc-400/10 text-zinc-400",
 };
+
+function toStatus(s: string | null): PropertyStatus {
+  const v = (s ?? "").toLowerCase();
+  if (v === "sold" || v === "sold out") return "Sold Out";
+  if (v === "coming soon") return "Coming Soon";
+  return "Active";
+}
 
 function mapRow(row: DbRow): Property {
   return {
@@ -59,8 +73,21 @@ function mapRow(row: DbRow): Property {
     units: row.total_units ?? 1,
     available: row.available_units ?? 0,
     price: Number(row.price ?? 0),
-    status: row.status,
+    status: toStatus(row.status),
+    imagePath: row.image_path ?? null,
   };
+}
+
+function getImageUrl(path: string | null) {
+  if (!path) return null;
+  return supabase.storage.from(BUCKET).getPublicUrl(path).data.publicUrl;
+}
+
+function getMessage(err: unknown) {
+  if (typeof err === "object" && err !== null && "message" in err) {
+    return String((err as { message: unknown }).message);
+  }
+  return "Kuch galat ho gaya.";
 }
 
 function formatPrice(n: number) {
@@ -75,7 +102,6 @@ const emptyForm = {
   location: "",
   type: "Apartment" as PropertyType,
   units: "",
-  available: "",
   price: "",
   status: "Active" as PropertyStatus,
 };
@@ -95,6 +121,11 @@ export default function PropertiesPage() {
   const [menuId, setMenuId] = useState<number | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
+
+  // Image state
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [removeImage, setRemoveImage] = useState(false);
 
   async function fetchProperties() {
     const { data, error } = await supabase
@@ -129,9 +160,17 @@ export default function PropertiesPage() {
     return matchesSearch && matchesFilter;
   });
 
+  function resetImageState() {
+    if (imagePreview) URL.revokeObjectURL(imagePreview);
+    setImageFile(null);
+    setImagePreview(null);
+    setRemoveImage(false);
+  }
+
   function openAddModal() {
     setForm(emptyForm);
     setEditingProperty(null);
+    resetImageState();
     setShowModal(true);
   }
 
@@ -139,6 +178,29 @@ export default function PropertiesPage() {
     setShowModal(false);
     setEditingProperty(null);
     setForm(emptyForm);
+    resetImageState();
+  }
+
+  function handleImageChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.type.startsWith("image/")) {
+      setError("Sirf image file select karo.");
+      return;
+    }
+
+    if (imagePreview) URL.revokeObjectURL(imagePreview);
+    setImageFile(file);
+    setImagePreview(URL.createObjectURL(file));
+    setRemoveImage(false);
+  }
+
+  function handleRemoveImage() {
+    if (imagePreview) URL.revokeObjectURL(imagePreview);
+    setImageFile(null);
+    setImagePreview(null);
+    setRemoveImage(true);
   }
 
   async function handleSaveProperty(e: React.FormEvent) {
@@ -147,52 +209,99 @@ export default function PropertiesPage() {
     if (!form.name || !form.location || !form.units) return;
 
     const units = Number(form.units);
-    const available = Number(form.available || 0);
 
-    if (available > units) {
-      setError("Available units total units se zyada nahi ho sakte.");
+    if (units < 1) {
+      setError("Total units kam se kam 1 hone chahiye.");
       return;
     }
 
-    const payload = {
-      title: form.name.trim(),
-      location: form.location.trim(),
-      property_type: form.type,
-      status: form.status,
-      price: Number(form.price || 0),
-      total_units: units,
-      available_units: available,
-    };
+    const oldPath = editingProperty?.imagePath ?? null;
+    let imagePath = oldPath;
 
     setSaving(true);
 
-    const { error } = editingProperty
-      ? await supabase.from("properties").update(payload).eq("id", editingProperty.id)
-      : await supabase.from("properties").insert([payload]);
+    try {
+      // 1. Photo: compress + upload
+      if (imageFile) {
+        const small = await compressImage(imageFile);
+        const path = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.webp`;
 
-    setSaving(false);
+        const { error: uploadError } = await supabase.storage
+          .from(BUCKET)
+          .upload(path, small, { contentType: "image/webp" });
 
-    if (error) {
-      setError(error.message);
-      return;
+        if (uploadError) throw uploadError;
+        imagePath = path;
+      } else if (removeImage) {
+        imagePath = null;
+      }
+
+      // 2. Save row (available_units deals se auto-calculate hote hain)
+      const payload = {
+        title: form.name.trim(),
+        location: form.location.trim(),
+        property_type: form.type,
+        status: form.status,
+        price: Number(form.price || 0),
+        total_units: units,
+        image_path: imagePath,
+      };
+
+      let propertyId: number | undefined = editingProperty?.id;
+
+      if (editingProperty) {
+        const { error } = await supabase
+          .from("properties")
+          .update(payload)
+          .eq("id", editingProperty.id);
+        if (error) throw error;
+      } else {
+        const { data, error } = await supabase
+          .from("properties")
+          .insert([{ ...payload, available_units: units }])
+          .select("id")
+          .single();
+        if (error) throw error;
+        propertyId = data.id;
+      }
+
+      // 3. Units dobara calculate (total_units badla ho to bhi sahi rahe)
+      let recalcMessage: string | null = null;
+      if (propertyId !== undefined) {
+        const { error: rpcError } = await supabase.rpc("recalc_property_units", {
+          pid: propertyId,
+        });
+        if (rpcError) recalcMessage = rpcError.message;
+      }
+
+      // 4. Purani photo storage se hatao (replace/remove hone par)
+      if (oldPath && oldPath !== imagePath) {
+        await supabase.storage.from(BUCKET).remove([oldPath]);
+      }
+
+      closeModal();
+      fetchProperties();
+      setError(
+        recalcMessage ? `Saved, par units recalc nahi hue: ${recalcMessage}` : null
+      );
+    } catch (err) {
+      setError(getMessage(err));
+    } finally {
+      setSaving(false);
     }
-
-    setError(null);
-    closeModal();
-    fetchProperties();
   }
 
   function startEdit(property: Property) {
     setEditingProperty(property);
+    resetImageState();
 
     setForm({
       name: property.name,
       location: property.location,
       type: property.type,
       units: property.units.toString(),
-      available: property.available.toString(),
       price: property.price ? property.price.toString() : "",
-      status: property.status,
+      status: property.status === "Sold Out" ? "Active" : property.status,
     });
 
     setMenuId(null);
@@ -215,6 +324,11 @@ export default function PropertiesPage() {
       return;
     }
 
+    // Row delete hone ke baad hi photo hatao (storage API se, SQL se nahi)
+    if (property.imagePath) {
+      await supabase.storage.from(BUCKET).remove([property.imagePath]);
+    }
+
     setMenuId(null);
 
     if (viewProperty?.id === id) {
@@ -228,6 +342,10 @@ export default function PropertiesPage() {
   const availableUnits = properties.reduce((sum, p) => sum + p.available, 0);
   const activeProjects = properties.filter((p) => p.status === "Active").length;
   const portfolioValue = properties.reduce((sum, p) => sum + p.price * p.units, 0);
+
+  const existingImageUrl =
+    editingProperty && !removeImage ? getImageUrl(editingProperty.imagePath) : null;
+  const previewSrc = imagePreview ?? existingImageUrl;
 
   return (
     <div className="min-h-screen bg-[#07090c] text-white">
@@ -326,123 +444,137 @@ export default function PropertiesPage() {
 
         {/* Property Grid */}
         <div className="mt-6 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-          {filteredProperties.map((property) => (
-            <div
-              key={property.id}
-              className="group overflow-hidden rounded-2xl border border-white/[0.09] bg-[#0b0e12] transition hover:border-white/20"
-            >
-              {/* Image Placeholder */}
-              <div className="relative h-44 overflow-hidden bg-gradient-to-br from-zinc-800 via-zinc-900 to-black">
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <Building2 size={48} className="text-white/[0.08]" />
-                </div>
+          {filteredProperties.map((property) => {
+            const imageUrl = getImageUrl(property.imagePath);
 
-                <span
-                  className={`absolute left-4 top-4 rounded-full px-2.5 py-1 text-[11px] font-medium ${statusStyles[property.status] ?? statusStyles["Sold Out"]}`}
-                >
-                  {property.status}
-                </span>
-
-                {/* More Menu */}
-                <div className="absolute right-3 top-3">
-                  <button
-                    onClick={() =>
-                      setMenuId(menuId === property.id ? null : property.id)
-                    }
-                    className="rounded-lg bg-black/40 p-2 text-zinc-400 backdrop-blur hover:text-white"
-                  >
-                    <MoreHorizontal size={17} />
-                  </button>
-
-                  {menuId === property.id && (
-                    <div className="absolute right-0 top-10 z-30 w-36 overflow-hidden rounded-xl border border-white/10 bg-[#11151b] p-1 shadow-2xl">
-                      <button
-                        onClick={() => {
-                          setViewProperty(property);
-                          setMenuId(null);
-                        }}
-                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-zinc-300 hover:bg-white/[0.06] hover:text-white"
-                      >
-                        <Eye size={13} />
-                        View
-                      </button>
-
-                      <button
-                        onClick={() => startEdit(property)}
-                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-zinc-300 hover:bg-white/[0.06] hover:text-white"
-                      >
-                        <Pencil size={13} />
-                        Edit
-                      </button>
-
-                      <button
-                        onClick={() => deleteProperty(property.id)}
-                        className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-red-400 hover:bg-red-500/10"
-                      >
-                        <Trash2 size={13} />
-                        Delete
-                      </button>
+            return (
+              <div
+                key={property.id}
+                className="group overflow-hidden rounded-2xl border border-white/[0.09] bg-[#0b0e12] transition hover:border-white/20"
+              >
+                {/* Image */}
+                <div className="relative h-44 overflow-hidden bg-gradient-to-br from-zinc-800 via-zinc-900 to-black">
+                  {imageUrl ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={imageUrl}
+                      alt={property.name}
+                      loading="lazy"
+                      className="absolute inset-0 h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="absolute inset-0 flex items-center justify-center">
+                      <Building2 size={48} className="text-white/[0.08]" />
                     </div>
                   )}
-                </div>
-              </div>
 
-              {/* Content */}
-              <div className="p-5">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h2 className="font-semibold text-white">{property.name}</h2>
-
-                    <div className="mt-1.5 flex items-center gap-1.5 text-xs text-zinc-500">
-                      <MapPin size={13} />
-                      {property.location}
-                    </div>
-                  </div>
-
-                  <span className="rounded-lg bg-white/[0.05] px-2 py-1 text-[10px] text-zinc-400">
-                    {property.type}
-                  </span>
-                </div>
-
-                <div className="mt-5 grid grid-cols-3 border-y border-white/[0.07] py-4">
-                  <PropertyInfo
-                    icon={<Building2 size={14} />}
-                    value={property.units.toString()}
-                    label="Units"
-                  />
-
-                  <PropertyInfo
-                    icon={<BedDouble size={14} />}
-                    value={property.available.toString()}
-                    label="Available"
-                  />
-
-                  <PropertyInfo
-                    icon={<Maximize size={14} />}
-                    value="1,850"
-                    label="Sq.ft avg."
-                  />
-                </div>
-
-                <div className="mt-4 flex items-end justify-between">
-                  <div>
-                    <p className="text-[11px] text-zinc-600">Starting from</p>
-
-                    <p className="mt-1 text-lg font-semibold">
-                      {formatPrice(property.price)}
-                    </p>
-                  </div>
-
-                  <button
-                    onClick={() => setViewProperty(property)}
-                    className="rounded-lg border border-white/[0.09] px-3 py-2 text-xs text-zinc-400 transition hover:border-cyan-400/30 hover:text-cyan-300"
+                  <span
+                    className={`absolute left-4 top-4 rounded-full px-2.5 py-1 text-[11px] font-medium backdrop-blur ${statusStyles[property.status]} ${imageUrl ? "bg-black/60" : ""}`}
                   >
-                    View Details
-                  </button>
+                    {property.status}
+                  </span>
+
+                  {/* More Menu */}
+                  <div className="absolute right-3 top-3">
+                    <button
+                      onClick={() =>
+                        setMenuId(menuId === property.id ? null : property.id)
+                      }
+                      className="rounded-lg bg-black/40 p-2 text-zinc-400 backdrop-blur hover:text-white"
+                    >
+                      <MoreHorizontal size={17} />
+                    </button>
+
+                    {menuId === property.id && (
+                      <div className="absolute right-0 top-10 z-30 w-36 overflow-hidden rounded-xl border border-white/10 bg-[#11151b] p-1 shadow-2xl">
+                        <button
+                          onClick={() => {
+                            setViewProperty(property);
+                            setMenuId(null);
+                          }}
+                          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-zinc-300 hover:bg-white/[0.06] hover:text-white"
+                        >
+                          <Eye size={13} />
+                          View
+                        </button>
+
+                        <button
+                          onClick={() => startEdit(property)}
+                          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-zinc-300 hover:bg-white/[0.06] hover:text-white"
+                        >
+                          <Pencil size={13} />
+                          Edit
+                        </button>
+
+                        <button
+                          onClick={() => deleteProperty(property.id)}
+                          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-red-400 hover:bg-red-500/10"
+                        >
+                          <Trash2 size={13} />
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Content */}
+                <div className="p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h2 className="font-semibold text-white">{property.name}</h2>
+
+                      <div className="mt-1.5 flex items-center gap-1.5 text-xs text-zinc-500">
+                        <MapPin size={13} />
+                        {property.location}
+                      </div>
+                    </div>
+
+                    <span className="rounded-lg bg-white/[0.05] px-2 py-1 text-[10px] text-zinc-400">
+                      {property.type}
+                    </span>
+                  </div>
+
+                  <div className="mt-5 grid grid-cols-3 border-y border-white/[0.07] py-4">
+                    <PropertyInfo
+                      icon={<Building2 size={14} />}
+                      value={property.units.toString()}
+                      label="Units"
+                    />
+
+                    <PropertyInfo
+                      icon={<BedDouble size={14} />}
+                      value={property.available.toString()}
+                      label="Available"
+                    />
+
+                    <PropertyInfo
+                      icon={<Maximize size={14} />}
+                      value="1,850"
+                      label="Sq.ft avg."
+                    />
+                  </div>
+
+                  <div className="mt-4 flex items-end justify-between">
+                    <div>
+                      <p className="text-[11px] text-zinc-600">Starting from</p>
+
+                      <p className="mt-1 text-lg font-semibold">
+                        {formatPrice(property.price)}
+                      </p>
+                    </div>
+
+                    <button
+                      onClick={() => setViewProperty(property)}
+                      className="rounded-lg border border-white/[0.09] px-3 py-2 text-xs text-zinc-400 transition hover:border-cyan-400/30 hover:text-cyan-300"
+                    >
+                      View Details
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         {loading && (
@@ -480,6 +612,45 @@ export default function PropertiesPage() {
             </div>
 
             <form onSubmit={handleSaveProperty} className="mt-5 space-y-3">
+              {/* Photo */}
+              <div>
+                <label className="mb-1.5 block text-xs text-zinc-500">
+                  Property Photo
+                </label>
+
+                {previewSrc && (
+                  <div className="mb-2 h-36 overflow-hidden rounded-xl border border-white/[0.09]">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={previewSrc}
+                      alt="Property preview"
+                      className="h-full w-full object-cover"
+                    />
+                  </div>
+                )}
+
+                <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-white/[0.15] bg-[#07090c] px-3 py-3 text-xs text-zinc-400 transition hover:border-cyan-400/40 hover:text-cyan-300">
+                  <ImagePlus size={15} />
+                  {previewSrc ? "Photo badlo" : "Photo add karo"}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={handleImageChange}
+                    className="hidden"
+                  />
+                </label>
+
+                {previewSrc && (
+                  <button
+                    type="button"
+                    onClick={handleRemoveImage}
+                    className="mt-2 text-xs text-red-400 hover:underline"
+                  >
+                    Photo hata do
+                  </button>
+                )}
+              </div>
+
               <Field
                 label="Property Name"
                 value={form.name}
@@ -514,7 +685,7 @@ export default function PropertiesPage() {
                 </select>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div>
                 <Field
                   label="Total Units"
                   value={form.units}
@@ -524,13 +695,10 @@ export default function PropertiesPage() {
                   required
                 />
 
-                <Field
-                  label="Available Units"
-                  value={form.available}
-                  onChange={(value) => setForm({ ...form, available: value })}
-                  placeholder="12"
-                  type="number"
-                />
+                <p className="mt-1.5 text-[11px] text-zinc-600">
+                  Available units deals se apne aap update hote hain (closed
+                  deal = 1 unit sold).
+                </p>
               </div>
 
               <Field
@@ -551,10 +719,14 @@ export default function PropertiesPage() {
                   }
                   className="w-full rounded-xl border border-white/[0.09] bg-[#07090c] px-3 py-2.5 text-sm text-white outline-none focus:border-cyan-400/50"
                 >
-                  {STATUSES.map((s) => (
+                  {FORM_STATUSES.map((s) => (
                     <option key={s}>{s}</option>
                   ))}
                 </select>
+
+                <p className="mt-1.5 text-[11px] text-zinc-600">
+                  Saari units bikne par status apne aap &quot;Sold Out&quot; ho jata hai.
+                </p>
               </div>
 
               <button
@@ -576,7 +748,18 @@ export default function PropertiesPage() {
       {/* View Details Modal */}
       {viewProperty && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-lg rounded-2xl border border-white/[0.09] bg-[#0b0e12] p-6">
+          <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-2xl border border-white/[0.09] bg-[#0b0e12] p-6">
+            {getImageUrl(viewProperty.imagePath) && (
+              <div className="mb-5 h-48 overflow-hidden rounded-xl border border-white/[0.09]">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={getImageUrl(viewProperty.imagePath) ?? ""}
+                  alt={viewProperty.name}
+                  className="h-full w-full object-cover"
+                />
+              </div>
+            )}
+
             <div className="flex items-start justify-between">
               <div>
                 <p className="text-xs text-cyan-400">Property Details</p>

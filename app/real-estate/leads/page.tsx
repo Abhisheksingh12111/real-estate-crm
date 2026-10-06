@@ -14,7 +14,7 @@ import {
   Pencil,
   Trash2,
 } from "lucide-react";
-import { supabase } from "@/lib/supabase"; // <-- apna sahi path
+import { supabase } from "@/lib/supabaseClient";
 
 type Stage = "New Lead" | "Qualified" | "Site Visit" | "Converted";
 
@@ -53,6 +53,16 @@ const stageStyles: Record<Stage, { dot: string; bar: string }> = {
   Converted: { dot: "bg-violet-400", bar: "bg-violet-400" },
 };
 
+const emptyForm = {
+  name: "",
+  phone: "",
+  email: "",
+  property: "",
+  value: "",
+  source: "",
+  stage: "New Lead" as Stage,
+};
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function rowToLead(row: any): Lead {
   return {
@@ -67,24 +77,25 @@ function rowToLead(row: any): Lead {
   };
 }
 
+// "—" sirf display ke liye hai, form mein khali dikhana chahiye
+function clean(v: string) {
+  return v === "—" ? "" : v;
+}
+
 export default function LeadPipelinePage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [showModal, setShowModal] = useState(false);
+  const [editingLead, setEditingLead] = useState<Lead | null>(null);
+  const [viewLead, setViewLead] = useState<Lead | null>(null);
+  const [saving, setSaving] = useState(false);
   const [draggedId, setDraggedId] = useState<number | null>(null);
   const [menuLeadId, setMenuLeadId] = useState<number | null>(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const [form, setForm] = useState({
-    name: "",
-    phone: "",
-    email: "",
-    property: "",
-    value: "",
-    source: "",
-  });
+  const [form, setForm] = useState(emptyForm);
 
   useEffect(() => {
     async function loadLeads() {
@@ -168,6 +179,34 @@ export default function LeadPipelinePage() {
     setMenuLeadId(leadId);
   }
 
+  function openAddModal() {
+    setEditingLead(null);
+    setForm(emptyForm);
+    setShowModal(true);
+  }
+
+  function openEditModal(lead: Lead) {
+    closeMenu();
+    setViewLead(null);
+    setEditingLead(lead);
+    setForm({
+      name: clean(lead.name),
+      phone: clean(lead.phone),
+      email: clean(lead.email),
+      property: clean(lead.property),
+      value: clean(lead.value),
+      source: clean(lead.source),
+      stage: lead.stage,
+    });
+    setShowModal(true);
+  }
+
+  function closeModal() {
+    setShowModal(false);
+    setEditingLead(null);
+    setForm(emptyForm);
+  }
+
   function deleteLead(id: number) {
     closeMenu();
     const lead = leads.find((l) => l.id === id);
@@ -177,6 +216,7 @@ export default function LeadPipelinePage() {
     if (!ok) return;
 
     setLeads((prev) => prev.filter((l) => l.id !== id));
+    if (viewLead?.id === id) setViewLead(null);
 
     supabase
       .from("leads")
@@ -213,34 +253,64 @@ export default function LeadPipelinePage() {
     setDraggedId(null);
   }
 
-  async function handleAddLead(e: React.FormEvent) {
+  async function handleSaveLead(e: React.FormEvent) {
     e.preventDefault();
     if (!form.name || !form.phone) return;
 
-    const { data, error } = await supabase
-      .from("leads")
-      .insert({
-        name: form.name,
-        phone: form.phone,
-        email: form.email || null,
-        property_interest: form.property || null,
-        value: form.value || null,
-        source: form.source || null,
-        status: "new",
-      })
-      .select()
-      .single();
+    const payload = {
+      name: form.name.trim(),
+      phone: form.phone.trim(),
+      email: form.email.trim() || null,
+      property_interest: form.property.trim() || null,
+      value: form.value.trim() || null,
+      source: form.source.trim() || null,
+      status: stageToStatus[form.stage],
+    };
 
-    if (error) {
-      console.error("INSERT ERROR:", error);
-      setErrorMsg(error.message);
-      return;
+    setSaving(true);
+
+    if (editingLead) {
+      const { data, error } = await supabase
+        .from("leads")
+        .update(payload)
+        .eq("id", editingLead.id)
+        .select()
+        .single();
+
+      setSaving(false);
+
+      if (error) {
+        console.error("EDIT ERROR:", error);
+        setErrorMsg(error.message);
+        return;
+      }
+
+      const updated = rowToLead(data);
+      setLeads((prev) => prev.map((l) => (l.id === updated.id ? updated : l)));
+    } else {
+      const { data, error } = await supabase
+        .from("leads")
+        .insert(payload)
+        .select()
+        .single();
+
+      setSaving(false);
+
+      if (error) {
+        console.error("INSERT ERROR:", error);
+        setErrorMsg(error.message);
+        return;
+      }
+
+      setLeads((prev) => [rowToLead(data), ...prev]);
     }
 
-    setLeads((prev) => [rowToLead(data), ...prev]);
-    setForm({ name: "", phone: "", email: "", property: "", value: "", source: "" });
-    setShowModal(false);
+    setErrorMsg(null);
+    closeModal();
   }
+
+  const menuLead =
+    menuLeadId !== null ? leads.find((l) => l.id === menuLeadId) ?? null : null;
 
   return (
     <div className="min-h-screen bg-[#07090c] text-white">
@@ -258,7 +328,7 @@ export default function LeadPipelinePage() {
           </div>
 
           <button
-            onClick={() => setShowModal(true)}
+            onClick={openAddModal}
             className="flex items-center gap-2 rounded-xl bg-cyan-400 px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-cyan-300"
           >
             <Plus size={17} />
@@ -407,7 +477,7 @@ export default function LeadPipelinePage() {
       </div>
 
       {/* Floating 3-dot menu */}
-      {menuLeadId !== null && (
+      {menuLead && (
         <div
           ref={menuRef}
           className="fixed z-[100] w-[170px] rounded-xl border border-white/10 bg-[#151515] p-1.5 shadow-2xl shadow-black/50"
@@ -417,12 +487,7 @@ export default function LeadPipelinePage() {
           <button
             type="button"
             onClick={() => {
-              const lead = leads.find((l) => l.id === menuLeadId);
-              if (lead) {
-                alert(
-                  `${lead.name}\n${lead.phone}\n${lead.email}\n${lead.property}\n${lead.value}`
-                );
-              }
+              setViewLead(menuLead);
               closeMenu();
             }}
             className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-white transition hover:bg-white/[0.06]"
@@ -433,10 +498,7 @@ export default function LeadPipelinePage() {
 
           <button
             type="button"
-            onClick={() => {
-              alert("Edit feature coming soon!");
-              closeMenu();
-            }}
+            onClick={() => openEditModal(menuLead)}
             className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-white transition hover:bg-white/[0.06]"
           >
             <Pencil size={14} />
@@ -445,9 +507,7 @@ export default function LeadPipelinePage() {
 
           <button
             type="button"
-            onClick={() => {
-              if (menuLeadId !== null) deleteLead(menuLeadId);
-            }}
+            onClick={() => deleteLead(menuLead.id)}
             className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-red-300 transition hover:bg-red-500/10"
           >
             <Trash2 size={14} />
@@ -456,21 +516,23 @@ export default function LeadPipelinePage() {
         </div>
       )}
 
-      {/* Add Lead Modal */}
+      {/* Add / Edit Lead Modal */}
       {showModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-md rounded-2xl border border-white/[0.09] bg-[#0b0e12] p-6">
+          <div className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-2xl border border-white/[0.09] bg-[#0b0e12] p-6">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Add Lead</h2>
+              <h2 className="text-lg font-semibold">
+                {editingLead ? "Edit Lead" : "Add Lead"}
+              </h2>
               <button
-                onClick={() => setShowModal(false)}
+                onClick={closeModal}
                 className="rounded-lg p-1.5 text-zinc-500 hover:bg-white/[0.05] hover:text-white"
               >
                 <X size={18} />
               </button>
             </div>
 
-            <form onSubmit={handleAddLead} className="mt-5 space-y-3">
+            <form onSubmit={handleSaveLead} className="mt-5 space-y-3">
               <Field
                 label="Full Name"
                 value={form.name}
@@ -511,16 +573,94 @@ export default function LeadPipelinePage() {
                 placeholder="e.g. Website, Referral, Walk-in"
               />
 
+              <div>
+                <label className="mb-1.5 block text-xs text-zinc-500">Stage</label>
+                <select
+                  value={form.stage}
+                  onChange={(e) =>
+                    setForm({ ...form, stage: e.target.value as Stage })
+                  }
+                  className="w-full rounded-xl border border-white/[0.09] bg-[#07090c] px-3 py-2.5 text-sm text-white outline-none focus:border-cyan-400/50"
+                >
+                  {stages.map((s) => (
+                    <option key={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
+
               <button
                 type="submit"
-                className="mt-2 w-full rounded-xl bg-cyan-400 px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-cyan-300"
+                disabled={saving}
+                className="mt-2 w-full rounded-xl bg-cyan-400 px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-cyan-300 disabled:opacity-60"
               >
-                Save Lead
+                {saving ? "Saving..." : editingLead ? "Update Lead" : "Save Lead"}
               </button>
             </form>
           </div>
         </div>
       )}
+
+      {/* View Details Modal */}
+      {viewLead && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-white/[0.09] bg-[#0b0e12] p-6">
+            <div className="flex items-start justify-between">
+              <div>
+                <p className="text-xs text-cyan-400">Lead Details</p>
+                <h2 className="mt-1 text-xl font-semibold">{viewLead.name}</h2>
+                <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-white/[0.06] px-2.5 py-1 text-xs text-zinc-300">
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${stageStyles[viewLead.stage].dot}`}
+                  />
+                  {viewLead.stage}
+                </span>
+              </div>
+
+              <button
+                onClick={() => setViewLead(null)}
+                className="rounded-lg p-1.5 text-zinc-500 hover:bg-white/[0.05] hover:text-white"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="mt-6 grid grid-cols-2 gap-3">
+              <Detail label="Phone" value={viewLead.phone} />
+              <Detail label="Email" value={viewLead.email} />
+              <Detail label="Interested Property" value={viewLead.property} />
+              <Detail label="Estimated Value" value={viewLead.value} />
+              <Detail label="Source" value={viewLead.source} />
+              <Detail label="Stage" value={viewLead.stage} />
+            </div>
+
+            <div className="mt-6 flex gap-3">
+              <button
+                onClick={() => setViewLead(null)}
+                className="flex-1 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-white hover:bg-white/[0.08]"
+              >
+                Close
+              </button>
+
+              <button
+                onClick={() => openEditModal(viewLead)}
+                className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-cyan-400 px-4 py-2.5 text-sm font-semibold text-black transition hover:bg-cyan-300"
+              >
+                <Pencil size={14} />
+                Edit Lead
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Detail({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3">
+      <p className="text-[11px] text-zinc-600">{label}</p>
+      <p className="mt-1 break-words text-sm text-zinc-200">{value}</p>
     </div>
   );
 }

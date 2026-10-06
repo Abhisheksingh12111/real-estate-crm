@@ -53,6 +53,7 @@ type Visit = {
 type Property = {
   id: number;
   status: string | null;
+  available_units: number | null;
 };
 
 const DAY = 86400000;
@@ -203,7 +204,7 @@ export default function RealEstateDashboard() {
             "id,client_name,property_name,deal_value,status,deal_date,created_at"
           ),
         supabase.from("site_visits").select("id,visit_date,status"),
-        supabase.from("properties").select("id,status"),
+       supabase.from("properties").select("id,status,available_units"),
       ]);
 
       if (!active) return;
@@ -345,10 +346,11 @@ export default function RealEstateDashboard() {
       (v) => v.status === "scheduled"
     ).length;
 
-    const availableProps = properties.filter(
-      (p) => p.status === "available"
-    ).length;
-
+   const availableProps = properties.filter(
+  (p) =>
+    (p.available_units ?? 0) > 0 &&
+    (p.status ?? "").toLowerCase() !== "coming soon"
+).length;
     return {
       revenue: formatMoney(revCur),
       revenueChangeNum: pctChange(revCur, revPrev),
